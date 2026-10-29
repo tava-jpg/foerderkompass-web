@@ -44,7 +44,7 @@
     suchnummer: 0,
   };
 
-  const EBENE = { land: "Land Thüringen", bund: "Bund", eu: "Europäische Union", kommune: "Kommune", sonstige: "" };
+  const EBENE = { land: "Land Thüringen", bund: "Bund", eu: "Europäische Union", kommune: "Region in Thüringen", sonstige: "" };
   const STUFEN = [
     ["passt", "Passt gut"],
     ["passt_teilweise", "Passt möglicherweise"],
