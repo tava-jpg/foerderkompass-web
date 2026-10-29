@@ -121,7 +121,11 @@
       body: JSON.stringify(daten),
     });
     const antwort = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(antwort.fehler || "Etwas ist schiefgegangen. Bitte versuchen Sie es erneut.");
+    if (!r.ok) {
+      const f = new Error(antwort.fehler || "Etwas ist schiefgegangen. Bitte versuchen Sie es erneut.");
+      f.code = antwort.code || "";
+      throw f;
+    }
     return antwort;
   }
 
@@ -380,7 +384,13 @@
           ergebnisseZeigen(ergebnisse, { ...vorschau, bewertet: false }, anfrage.projekt_id, { fokus: false });
         }
       } catch (f) {
-        ergebnisse.replaceChildren(meldung(fehlertext(f), "fehler"));
+        if (f.code === "limit_gast") {
+          ergebnisse.replaceChildren(el("div", { class: "meldung hinweis", role: "alert" },
+            el("p", {}, f.message),
+            el("p", {}, el("a", { class: "knopf haupt", href: "#/anmelden" }, "Kostenloses Konto anlegen"))));
+        } else {
+          ergebnisse.replaceChildren(meldung(fehlertext(f), f.code ? "hinweis" : "fehler"));
+        }
       } finally {
         if (nummer === zustand.suchnummer) { knopf.disabled = false; knopf.textContent = "Passende Förderung finden"; }
       }
