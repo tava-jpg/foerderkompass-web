@@ -147,6 +147,7 @@
     font: 600 1.6rem/1.25 "Source Serif 4", Georgia, serif;
     color: var(--fichte); margin: 0 0 8px;
   }
+  .status.pruefung { padding: 4px 0 24px; font-size: 15px; }
   .zusammenfassung + p { margin: 0 0 28px; color: var(--stein); font-size: 15px; }
 
   section.stufe { margin-bottom: 36px; }
@@ -312,6 +313,7 @@
     ["passt_nicht", "Passt eher nicht"],
   ];
   const kopf = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY };
+  let letzteSuche = 0;
 
   const $ = (s) => document.querySelector(s);
   function el(tag, attrs = {}, ...kinder) {
@@ -371,7 +373,7 @@
     );
   }
 
-  function ergebnisseZeigen(daten) {
+  function ergebnisseZeigen(daten, { vorschau = false, fokus = true } = {}) {
     const box = $("#ergebnisse");
     box.replaceChildren();
     const liste = daten.ergebnisse || [];
@@ -383,14 +385,21 @@
     const gut = liste.filter((p) => p.einstufung === "passt").length;
     const teils = liste.filter((p) => p.einstufung === "passt_teilweise").length;
     let satz;
-    if (!daten.bewertet) satz = `${liste.length} Programme kommen infrage`;
+    if (vorschau) satz = `${liste.length} Programme kommen infrage`;
+    else if (!daten.bewertet) satz = `${liste.length} Programme kommen infrage`;
     else if (gut) satz = `${gut} ${gut === 1 ? "Programm passt" : "Programme passen"} gut zu Ihrem Vorhaben`;
     else if (teils) satz = `${teils} ${teils === 1 ? "Programm kommt" : "Programme kommen"} möglicherweise infrage`;
     else satz = "Kein Programm passt eindeutig";
     box.append(el("h2", { class: "zusammenfassung", tabindex: "-1", id: "ergebnis-titel" }, satz));
-    box.append(el("p", {}, daten.bewertet
-      ? `Der Kompass hat die ${liste.length} ähnlichsten Programme ausgewählt und einzeln geprüft.`
-      : "Die genaue Prüfung ist gerade nicht verfügbar. Hier sind die ähnlichsten Programme ohne Einschätzung."));
+    if (vorschau) {
+      const hinweis = el("div", { class: "status pruefung" });
+      hinweis.innerHTML = NADEL + "<span>Die KI prüft jetzt jedes Programm einzeln und sortiert nach „passt gut“, „passt möglicherweise“ und „passt eher nicht“. Das dauert noch einige Sekunden.</span>";
+      box.append(hinweis);
+    } else {
+      box.append(el("p", {}, daten.bewertet
+        ? `Der Kompass hat die ${liste.length} ähnlichsten Programme ausgewählt und einzeln geprüft.`
+        : "Die genaue Prüfung ist gerade nicht verfügbar. Hier sind die ähnlichsten Programme ohne Einschätzung."));
+    }
 
     for (const [stufe, titel] of STUFEN) {
       const teil = liste.filter((p) => p.einstufung === stufe);
@@ -407,16 +416,17 @@
       }
       box.append(sektion);
     }
-    $("#ergebnis-titel").focus({ preventScroll: true });
-    $("#ergebnis-titel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    if (fokus) {
+      $("#ergebnis-titel").focus({ preventScroll: true });
+      $("#ergebnis-titel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    }
   }
 
+  const NADEL = '<svg class="nadel" viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15" fill="none" stroke="#1d3a31" stroke-width="1.6"/><g><path d="M17 5 L20.5 17 L17 29 L13.5 17 Z" fill="#1d3a31"/><path d="M17 5 L20.5 17 L13.5 17 Z" fill="#2c7a4c"/></g></svg>';
   function ladeanzeige() {
     const box = $("#ergebnisse");
     box.replaceChildren(el("div", { class: "status" }));
-    box.firstChild.innerHTML =
-      '<svg class="nadel" viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15" fill="none" stroke="#1d3a31" stroke-width="1.6"/><g><path d="M17 5 L20.5 17 L17 29 L13.5 17 Z" fill="#1d3a31"/><path d="M17 5 L20.5 17 L13.5 17 Z" fill="#2c7a4c"/></g></svg>' +
-      "<span>Der Kompass prüft die Förderprogramme. Das dauert etwa 10 bis 20 Sekunden.</span>";
+    box.firstChild.innerHTML = NADEL + "<span>Der Kompass sucht passende Förderprogramme …</span>";
   }
 
   function fehlerZeigen(text) {
@@ -443,20 +453,40 @@
     knopf.disabled = true;
     knopf.textContent = "Suche läuft …";
     ladeanzeige();
-    try {
+    const anfrage = {
+      vorhaben,
+      zielgruppe: gewaehlt && gewaehlt.value ? gewaehlt.value : null,
+      zielgruppe_name: gewaehlt && gewaehlt.value ? gewaehlt.dataset.name : "",
+      standort: $("#standort").value.trim(),
+    };
+    const suchnummer = ++letzteSuche;
+    async function abfrage(extra) {
       const r = await fetch(SUPABASE_URL + "/functions/v1/matching", {
         method: "POST",
         headers: { ...kopf, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vorhaben,
-          zielgruppe: gewaehlt && gewaehlt.value ? gewaehlt.value : null,
-          zielgruppe_name: gewaehlt && gewaehlt.value ? gewaehlt.dataset.name : "",
-          standort: $("#standort").value.trim(),
-        }),
+        body: JSON.stringify({ ...anfrage, ...extra }),
       });
       const daten = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(daten.fehler || "Die Suche hat nicht geklappt. Bitte versuchen Sie es gleich noch einmal.");
-      ergebnisseZeigen(daten);
+      return daten;
+    }
+    try {
+      // Stufe 1: schnell die ähnlichsten Programme zeigen
+      const vorschau = await abfrage({ nur_suche: true });
+      if (suchnummer !== letzteSuche) return;
+      const hatTreffer = (vorschau.ergebnisse || []).length > 0;
+      ergebnisseZeigen(vorschau, { vorschau: hatTreffer });
+      if (!hatTreffer) return;
+      knopf.textContent = "KI prüft …";
+      // Stufe 2: KI-Bewertung nachliefern
+      try {
+        const bewertet = await abfrage({});
+        if (suchnummer !== letzteSuche) return;
+        ergebnisseZeigen(bewertet, { fokus: false });
+      } catch (e) {
+        if (suchnummer !== letzteSuche) return;
+        ergebnisseZeigen({ ...vorschau, bewertet: false }, { fokus: false });
+      }
     } catch (e) {
       fehlerZeigen(e.message && !e.message.startsWith("Failed to fetch")
         ? e.message
