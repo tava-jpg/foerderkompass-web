@@ -239,3 +239,161 @@ footer p { margin: 0 0 8px; max-width: 72ch; }
 /* Platz für die Vergleichsleiste am Ende der Merkliste */
 .vergleichsleiste:not([hidden]) { margin-top: 24px; }
 .statusgruppe:last-of-type { margin-bottom: 72px; }
+
+/* =====================================================================
+   Version 2: Startseite, geführter Einstieg, Arbeitsbereich
+   ===================================================================== */
+
+/* ---------- Kopfleiste ---------- */
+nav.leiste ul li.konto { align-self: center; font-size: 14px; color: var(--stein); padding: 0 6px; }
+nav.leiste ul a.anmelden { border: 1.5px solid var(--fichte); color: var(--fichte); font-weight: 600; }
+nav.leiste ul a.anmelden:hover { background: var(--fichte); color: #fff; }
+
+/* ---------- Arbeitsbereich mit Seitenleiste ---------- */
+main.mit-leiste {
+  max-width: 1240px; margin: 0 auto; padding: 0 20px;
+  display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; align-items: start;
+}
+main.mit-leiste .app-inhalt .seite { padding-left: 0; padding-right: 0; max-width: 820px; margin: 0; }
+main.mit-leiste .app-inhalt .seite.breit { max-width: none; }
+main.mit-leiste header.kopf { padding-top: 28px; }
+main.mit-leiste header.kopf .seite { padding: 0; margin: 0; }
+.seitenleiste { position: sticky; top: 0; padding: 28px 0; }
+.seitenleiste ul { list-style: none; margin: 0; padding: 0; }
+.seitenleiste a {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 10px; color: var(--schiefer); text-decoration: none; font-size: 15px;
+}
+.seitenleiste a:hover { background: #e2ebe6; }
+.seitenleiste a[aria-current="page"] { background: var(--fichte); color: #fff; font-weight: 600; }
+.seitenleiste li:nth-child(2) a { margin-bottom: 10px; }
+.zaehler { font-size: 12px; font-weight: 600; min-width: 22px; text-align: center; padding: 1px 7px; border-radius: 999px; background: #d4e0d9; color: var(--fichte); }
+.seitenleiste a[aria-current="page"] .zaehler { background: rgba(255,255,255,.2); color: #fff; }
+
+@media (max-width: 860px) {
+  main.mit-leiste { grid-template-columns: 1fr; gap: 0; padding: 0; }
+  main.mit-leiste .app-inhalt { padding: 0 20px; }
+  .seitenleiste { position: static; padding: 8px 12px; overflow-x: auto; background: var(--papier); border-bottom: 1px solid var(--linie); }
+  .seitenleiste ul { display: flex; gap: 4px; width: max-content; }
+  .seitenleiste a { padding: 8px 12px; white-space: nowrap; }
+  .seitenleiste li:nth-child(2) a { margin-bottom: 0; }
+}
+
+/* ---------- Passung ---------- */
+.kartenkopf { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.passung { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; min-width: 74px; }
+.passung-zahl { font: 600 1.05rem/1 "Public Sans", sans-serif; }
+.passung-balken { display: block; width: 74px; height: 6px; border-radius: 3px; background: #e3e8e5; overflow: hidden; }
+.passung-balken span { display: block; height: 100%; border-radius: 3px; }
+.passung.hoch .passung-zahl { color: var(--gut); }
+.passung.hoch .passung-balken span { background: var(--gut); }
+.passung.mittel .passung-zahl { color: var(--teils); }
+.passung.mittel .passung-balken span { background: var(--teils); }
+.passung.niedrig .passung-zahl { color: var(--nicht); }
+.passung.niedrig .passung-balken span { background: var(--nicht); }
+
+/* ---------- Startseite ---------- */
+header.kopf.landing { padding: 64px 0 56px; }
+.landing-raster { position: relative; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-items: center; }
+.landing-raster h1 { max-width: 20ch; }
+.knopf.gross { padding: 18px 28px; font-size: 1.05rem; }
+.beispiel {
+  background: var(--papier); border: 1px solid var(--linie); border-radius: 16px; padding: 20px;
+  box-shadow: 0 18px 40px -24px rgba(29,58,49,.35);
+}
+.beispiel-titel { margin: 0 0 12px; font-size: 14px; color: var(--stein); }
+.beispiel-zeile {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 0 12px 12px; border-left: 4px solid var(--nicht); margin-bottom: 8px; font-weight: 500; font-size: 15px;
+}
+.beispiel-zeile.passt { border-left-color: var(--gut); }
+.beispiel-zeile.passt_teilweise { border-left-color: var(--teils); }
+.abschnitt { padding: 48px 0 8px; border-top: 1px solid var(--linie); }
+.abschnitt h2 { font-size: 1.8rem; margin-bottom: 24px; }
+.abschnitt h3 { font: 600 1.15rem/1.3 "Source Serif 4", Georgia, serif; color: var(--fichte); margin: 0 0 6px; }
+.abschnitt p { margin: 0; }
+ol.ablauf { list-style: none; counter-reset: schritt; padding: 0; margin: 0 0 32px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 28px; }
+ol.ablauf li { counter-increment: schritt; }
+ol.ablauf li::before {
+  content: counter(schritt); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--fichte); color: #fff; font-weight: 700; margin-bottom: 12px;
+}
+.leistungen { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 28px 40px; margin-bottom: 32px; }
+.abschnitt.aufruf { text-align: center; padding-bottom: 32px; }
+.abschnitt.aufruf p { margin: 0 0 20px; }
+
+@media (max-width: 860px) {
+  .landing-raster { grid-template-columns: 1fr; gap: 32px; }
+  header.kopf.landing { padding: 40px 0 36px; }
+}
+
+/* ---------- Geführter Einstieg ---------- */
+.schritt-knopf { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.kachel, .wahl-karte {
+  display: flex; flex-direction: column; gap: 6px; text-align: left; align-items: flex-start;
+  background: var(--papier); border: 1.5px solid var(--linie); border-radius: 14px; padding: 18px 18px;
+  font: inherit; color: var(--schiefer); cursor: pointer; transition: border-color .15s, box-shadow .15s;
+}
+.kachel:hover, .wahl-karte:hover { border-color: var(--fichte-hell); box-shadow: 0 6px 18px -12px rgba(29,58,49,.4); }
+.kachel.gewaehlt, .wahl-karte[aria-checked="true"] { border-color: var(--fichte); box-shadow: inset 0 0 0 1px var(--fichte); background: #f3f7f5; }
+.kachel-titel { font: 600 1.1rem/1.3 "Source Serif 4", Georgia, serif; color: var(--fichte); }
+.kachel-text { font-size: 14px; color: var(--stein); line-height: 1.45; }
+.wahl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+.einstieg-navi { margin-top: 8px; }
+.website-kasten { background: #f3f7f5; border-radius: 12px; padding: 16px; margin-bottom: 24px; }
+.website-kasten .titel { margin-bottom: 4px; }
+.zeile-mit-knopf { display: flex; gap: 10px; }
+.zeile-mit-knopf input { flex: 1; }
+article.idee { background: var(--papier); border: 1px solid var(--linie); border-radius: 14px; padding: 20px 22px; margin-bottom: 12px; }
+article.idee h3 { font: 600 1.2rem/1.3 "Source Serif 4", Georgia, serif; color: var(--fichte); margin: 0 0 8px; }
+article.idee p { margin: 0 0 10px; }
+.idee-programme { font-size: 15px; }
+.zusammenfassung-kasten h2 { margin: 2px 0 8px; }
+.zusammenfassung-kasten p { margin: 0 0 6px; }
+.meta { font-size: 14px; color: var(--stein); margin: 0; }
+.sichern-kasten {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap;
+  background: var(--fichte); color: #fff; border-radius: 14px; padding: 18px 22px; margin-bottom: 28px;
+}
+.sichern-kasten p { margin: 4px 0 0; max-width: 56ch; font-size: 15px; opacity: .92; }
+.sichern-kasten .knopf.haupt, .sichern-kasten button.haupt { background: #fff; color: var(--fichte); }
+
+@media (max-width: 560px) {
+  .wahl { grid-template-columns: 1fr; }
+  .zeile-mit-knopf { flex-direction: column; }
+  .kartenkopf { flex-direction: column; gap: 6px; }
+  .passung { align-items: flex-start; }
+}
+
+/* ---------- Arbeitsbereich ---------- */
+.naechste h2, .zweispaltig h2, .kopfzeile h2 { font-size: 1.3rem; }
+ul.schrittliste { list-style: none; margin: 0; padding: 0; }
+ul.schrittliste li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid var(--linie); }
+ul.schrittliste li:first-child { border-top: 0; padding-top: 4px; }
+ul.schrittliste p { margin: 2px 0 0; font-size: 15px; color: var(--stein); }
+ul.schrittliste .knopf { flex: none; }
+.kopfzeile { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 14px; }
+.kopfzeile h2 { margin: 0; }
+.abschnitt-innen { margin-bottom: 28px; }
+.projektraster { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.projektkarte { background: var(--papier); border: 1px solid var(--linie); border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.projektkarte h3 { font: 600 1.2rem/1.3 "Source Serif 4", Georgia, serif; margin: 0; }
+.projektkarte h3 a { color: var(--fichte); text-decoration: none; }
+.projektkarte h3 a:hover { text-decoration: underline; }
+.projektkarte .knopf { align-self: flex-start; margin-top: auto; }
+.zahlen { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+ul.top-liste { list-style: none; margin: 0; padding: 0; }
+ul.top-liste li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid #eef2ef; font-size: 15px; }
+ul.top-liste a { color: var(--schiefer); }
+.zweispaltig { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+ul.statuszahlen, ul.einfache-liste { list-style: none; margin: 0 0 16px; padding: 0; }
+ul.statuszahlen li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eef2ef; }
+ul.einfache-liste li { padding: 6px 0; border-bottom: 1px solid #eef2ef; }
+.projektleiste { display: flex; align-items: center; gap: 10px 20px; flex-wrap: wrap; margin: 0 0 24px; padding: 12px 16px; background: var(--papier); border: 1px solid var(--linie); border-radius: 12px; font-size: 15px; }
+.projektleiste .abstand { flex: 1; }
+@media (max-width: 760px) {
+  .zweispaltig { grid-template-columns: 1fr; }
+  ul.schrittliste li { flex-direction: column; align-items: flex-start; }
+}
+body.angemeldet nav.leiste .seite.breit, body.angemeldet footer .seite.breit { max-width: 1240px; }

@@ -166,18 +166,35 @@
   // Navigation
   // ------------------------------------------------------------------
   function menueZeigen(aktuell) {
-    const punkte = [["#/", "Suche"]];
-    if (angemeldet()) {
-      punkte.push(["#/projekte", "Projekte"], ["#/merkliste", "Merkliste"], ["#/antraege", "Anträge"], ["#/profil", "Profil"]);
-    }
     const ul = $("#menue");
+    if (angemeldet()) {
+      ul.replaceChildren(
+        el("li", { class: "konto" }, zustand.sitzung.user.email),
+        el("li", {}, el("a", { href: "#/abmelden" }, "Abmelden")));
+      return;
+    }
+    const punkte = [["#/", "Start"], ["#/start", "Förderung finden"], ["#/suche", "Freie Suche"]];
     ul.replaceChildren(...punkte.map(([href, text]) =>
       el("li", {}, el("a", { href, "aria-current": aktuell === href ? "page" : null }, text))));
-    if (angemeldet()) {
-      ul.append(el("li", {}, el("a", { href: "#/abmelden" }, "Abmelden")));
-    } else {
-      ul.append(el("li", {}, el("a", { href: "#/anmelden", "aria-current": aktuell === "#/anmelden" ? "page" : null }, "Anmelden")));
-    }
+    ul.append(el("li", {}, el("a", { class: "anmelden", href: "#/anmelden", "aria-current": aktuell === "#/anmelden" ? "page" : null }, "Anmelden")));
+  }
+
+  function seitenleiste(aktuell) {
+    const offen = zustand.projekte.length;
+    const gemerktZahl = zustand.merkliste.length;
+    const punkte = [
+      ["#/arbeitsbereich", "Übersicht", null, ["#/", "#/arbeitsbereich"]],
+      ["#/start", "Förderung finden", null, ["#/start"]],
+      ["#/projekte", "Projekte", offen, ["#/projekte", "#/projekt"]],
+      ["#/merkliste", "Merkliste", gemerktZahl, ["#/merkliste", "#/vergleich"]],
+      ["#/antraege", "Anträge", null, ["#/antraege", "#/assistent"]],
+      ["#/suche", "Freie Suche", null, ["#/suche"]],
+      ["#/profil", "Profil", null, ["#/profil"]],
+    ];
+    return el("nav", { class: "seitenleiste", "aria-label": "Arbeitsbereich" },
+      el("ul", {}, punkte.map(([href, text, zahl, pfade]) =>
+        el("li", {}, el("a", { href, "aria-current": pfade.includes(aktuell) ? "page" : null },
+          el("span", {}, text), zahl ? el("span", { class: "zaehler" }, String(zahl)) : null)))));
   }
 
   function route() {
@@ -193,20 +210,30 @@
     const main = $("#inhalt");
     menueZeigen(r.pfad);
     const seiten = {
-      "#/": seiteSuche, "#/anmelden": seiteAnmelden, "#/abmelden": seiteAbmelden, "#/profil": seiteProfil,
+      "#/": angemeldet() ? seiteArbeitsbereich : seiteLanding, "#/start": seiteEinstieg, "#/suche": seiteSuche,
+      "#/arbeitsbereich": seiteArbeitsbereich, "#/projekt": seiteProjekt,
+      "#/anmelden": seiteAnmelden, "#/abmelden": seiteAbmelden, "#/profil": seiteProfil,
       "#/projekte": seiteProjekte, "#/merkliste": seiteMerkliste, "#/vergleich": seiteVergleich,
       "#/programm": seiteProgramm, "#/assistent": seiteAssistent, "#/antraege": seiteAntraege,
       "#/impressum": seiteImpressum, "#/datenschutz": seiteDatenschutz, "#/warten": seiteWarten,
     };
-    const seite = seiten[r.pfad] || seiteSuche;
+    const seite = seiten[r.pfad] || (angemeldet() ? seiteArbeitsbereich : seiteLanding);
     main.replaceChildren();
+    let ziel = main;
+    const mitLeiste = angemeldet() && !["#/anmelden", "#/warten", "#/abmelden"].includes(r.pfad);
+    main.classList.toggle("mit-leiste", mitLeiste);
+    document.body.classList.toggle("angemeldet", mitLeiste);
+    if (mitLeiste) {
+      ziel = el("div", { class: "app-inhalt" });
+      main.append(seitenleiste(r.pfad), ziel);
+    }
     try {
-      await seite(main, r);
+      await seite(ziel, r);
     } catch (f) {
       console.error(f);
-      main.replaceChildren(el("div", { class: "seite" }, seitenkopf("Das hat nicht geklappt"), meldung(fehlertext(f), "fehler")));
+      ziel.replaceChildren(el("div", { class: "seite" }, seitenkopf("Das hat nicht geklappt"), meldung(fehlertext(f), "fehler")));
     }
-    if (r.pfad !== "#/") window.scrollTo(0, 0);
+    window.scrollTo(0, 0);
   }
 
   // ------------------------------------------------------------------
@@ -251,13 +278,23 @@
     if (p.link) fuss.append(el("a", { class: "original", href: p.link, target: "_blank", rel: "noopener" }, "Beim Fördergeber ansehen"));
 
     return el("article", { class: "programm " + (p.einstufung || "") },
-      el("h4", {}, el("a", { href: "#/programm/" + p.id }, p.titel)),
+      el("div", { class: "kartenkopf" },
+        el("h4", {}, el("a", { href: "#/programm/" + p.id }, p.titel)),
+        passungAnzeige(p.punkte)),
       herkunft ? el("p", { class: "herkunft" }, herkunft) : null,
       arten,
       p.begruendung ? el("p", { class: "begruendung" }, p.begruendung) : el("p", { class: "kurz" }, kuerzen(p.kurztext, 320)),
       p.offene_fragen ? el("p", { class: "offen" }, el("strong", {}, "Noch zu klären: "), p.offene_fragen) : null,
       p.fristen ? el("p", { class: "frist" }, el("strong", {}, "Frist: "), kuerzen(p.fristen, 200)) : null,
       fuss);
+  }
+  function passungAnzeige(punkte) {
+    if (punkte === null || punkte === undefined) return null;
+    const stufe = punkte >= 70 ? "hoch" : punkte >= 40 ? "mittel" : "niedrig";
+    return el("div", { class: "passung " + stufe, title: "Passung zu Ihrem Vorhaben" },
+      el("span", { class: "passung-zahl" }, `${punkte} %`),
+      el("span", { class: "passung-balken", "aria-hidden": "true" }, el("span", { style: `width:${punkte}%` })),
+      el("span", { class: "versteckt" }, " Passung"));
   }
   function alertFrei(nach, text) {
     const f = el("p", { class: "formfehler", role: "alert" }, text);
@@ -272,8 +309,9 @@
     const kopf = el("header", { class: "kopf" });
     kopf.innerHTML = `<svg class="hoehenlinien" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><g fill="none" stroke="#1d3a31" stroke-opacity=".09" stroke-width="1.4"><path d="M-20 250 C 120 200, 220 230, 330 170 S 560 90, 820 140"/><path d="M-20 222 C 110 176, 230 204, 340 146 S 560 66, 820 112"/><path d="M-20 194 C 100 152, 240 178, 350 122 S 565 44, 820 86"/><path d="M-20 166 C 95 130, 250 152, 362 100 S 570 26, 820 62"/><path d="M-20 138 C 90 108, 262 126, 376 80 S 578 12, 820 40"/><path d="M-20 110 C 88 88, 276 102, 392 62 S 590 2, 820 20"/><path d="M480 300 C 520 260, 600 250, 650 270 S 760 300, 820 280"/></g></svg>`;
     kopf.append(el("div", { class: "seite" },
-      el("h1", {}, "Welche Förderung passt zu Ihrem Vorhaben?"),
-      el("p", { class: "einleitung" }, "Beschreiben Sie in eigenen Worten, was Sie vorhaben. Der Kompass prüft über 800 Förderprogramme des Landes Thüringen, des Bundes und der EU und zeigt Ihnen, welche infrage kommen.")));
+      el("h1", {}, "Freie Suche"),
+      el("p", { class: "einleitung" }, "Beschreiben Sie in eigenen Worten, was Sie vorhaben. Der Kompass prüft alle Förderprogramme des Landes Thüringen, des Bundes, der EU und der LEADER-Regionen. Lieber Schritt für Schritt? ",
+        el("a", { href: "#/start" }, "Zum geführten Einstieg"))));
     main.append(kopf);
 
     const seite = el("div", { class: "seite" });
@@ -379,6 +417,7 @@
           if (nummer !== zustand.suchnummer) return;
           zustand.letzteSuche = { anfrage, daten: bewertet };
           ergebnisseZeigen(ergebnisse, bewertet, anfrage.projekt_id, { fokus: false });
+          if (anfrage.projekt_id) empfehlungenSpeichern(anfrage.projekt_id, bewertet);
         } catch (_) {
           if (nummer !== zustand.suchnummer) return;
           ergebnisseZeigen(ergebnisse, { ...vorschau, bewertet: false }, anfrage.projekt_id, { fokus: false });
@@ -422,7 +461,8 @@
         : "Die genaue Prüfung ist gerade nicht verfügbar. Hier sind die ähnlichsten Programme ohne Einschätzung."));
     }
     for (const [stufe, titel] of STUFEN) {
-      const teil = liste.filter((p) => p.einstufung === stufe);
+      const teil = liste.filter((p) => p.einstufung === stufe)
+        .sort((a, b) => (b.punkte ?? -1) - (a.punkte ?? -1));
       if (!teil.length) continue;
       const sektion = el("section", { class: "stufe" });
       if (stufe === "passt_nicht") {
@@ -508,11 +548,34 @@
       gruendungsjahr: el("input", { type: "number", id: "p-jahr", min: "1800", max: "2100", value: o.gruendungsjahr || "" }),
       taetigkeitsfeld: el("input", { type: "text", id: "p-feld", value: o.taetigkeitsfeld || "", maxlength: "300", placeholder: "z. B. Jugendarbeit, Bäckerei, Maschinenbau" }),
       beschreibung: el("textarea", { id: "p-beschreibung", maxlength: "2000", placeholder: "Was machen Sie, für wen, seit wann? Das hilft der KI bei der Einschätzung und beim Antragsentwurf." }, o.beschreibung || ""),
+      website: el("input", { type: "url", id: "p-website", maxlength: "300", value: o.website || "", placeholder: "www.ihre-website.de", inputmode: "url" }),
     };
+    const webKnopf = el("button", { type: "button", class: "neben" }, "Website auslesen");
+    const webRueck = el("div", { "aria-live": "polite" });
+    webKnopf.addEventListener("click", async () => {
+      if (!f.website.value.trim()) { webRueck.replaceChildren(el("p", { class: "formfehler" }, "Bitte geben Sie eine Website-Adresse ein.")); return; }
+      webKnopf.disabled = true;
+      webRueck.replaceChildren(ladeanzeige("Die KI liest Ihre Website …"));
+      try {
+        const { profil } = await funktion("ideen", { aktion: "website", url: f.website.value.trim() });
+        if (profil.name && !f.name.value) f.name.value = profil.name;
+        if (profil.zielgruppe && !f.zielgruppe.value) f.zielgruppe.value = profil.zielgruppe;
+        if (profil.rechtsform && !f.rechtsform.value) f.rechtsform.value = profil.rechtsform;
+        if (profil.landkreis && !f.landkreis.value) f.landkreis.value = profil.landkreis;
+        if (profil.taetigkeitsfeld) f.taetigkeitsfeld.value = profil.taetigkeitsfeld;
+        if (profil.beschreibung) f.beschreibung.value = profil.beschreibung;
+        if (profil.website) f.website.value = profil.website;
+        webRueck.replaceChildren(el("p", { class: "erfolg" }, "Übernommen – bitte prüfen und dann speichern."));
+      } catch (fe) { webRueck.replaceChildren(el("p", { class: "formfehler" }, fehlertext(fe))); }
+      webKnopf.disabled = false;
+    });
     const zeile = (id, text, feld, hilfe) => el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: id }, text), hilfe ? el("p", { class: "hilfe" }, hilfe) : null, feld);
     const knopf = el("button", { type: "submit", class: "haupt" }, "Profil speichern");
     const rueck = el("p", { class: "erfolg", "aria-live": "polite" });
     const form = el("form", { class: "flaeche", novalidate: true },
+      el("div", { class: "website-kasten" }, el("label", { class: "feld", for: "p-website" }, "Website"),
+        el("p", { class: "hilfe" }, "Die KI kann Ihr Profil aus Ihrer Website ausfüllen."),
+        el("div", { class: "zeile-mit-knopf" }, f.website, webKnopf), webRueck),
       zeile("p-name", "Name der Organisation oder Ihr Name", f.name),
       el("div", { class: "raster" },
         zeile("p-zielgruppe", "Wer stellt Anträge?", f.zielgruppe),
@@ -535,6 +598,7 @@
         landkreis: f.landkreis.value || null, mitarbeitende: f.mitarbeitende.value || null,
         gruendungsjahr: f.gruendungsjahr.value ? Number(f.gruendungsjahr.value) : null,
         taetigkeitsfeld: f.taetigkeitsfeld.value.trim() || null, beschreibung: f.beschreibung.value.trim() || null,
+        website: f.website.value.trim() || null,
       };
       try {
         const anfrage = zustand.organisation
@@ -620,7 +684,7 @@
             `${anzahl} gemerkte Programme`].filter(Boolean).join(" · ")),
           el("p", {}, kuerzen(p.beschreibung, 280)),
           el("div", { class: "knoepfe" },
-            el("a", { class: "knopf haupt", href: "#/?projekt=" + p.id, onclick: () => { zustand.letzteSuche = null; } }, "Passende Förderung finden"),
+            el("a", { class: "knopf haupt", href: "#/projekt/" + p.id }, "Empfehlungen ansehen"),
             el("a", { class: "knopf neben", href: "#/merkliste?projekt=" + p.id }, "Merkliste"),
             el("button", { type: "button", class: "neben", onclick: () => bearbeiten(p) }, "Bearbeiten"),
             el("button", { type: "button", class: "leise gefahr", onclick: () => loeschen(p) }, "Löschen"))));
@@ -808,6 +872,15 @@
   function gastLoeschen() { try { localStorage.removeItem(GAST_SCHLUESSEL); } catch { /* egal */ } }
 
   async function gastUebernehmen() {
+    let ziel = null;
+    const e = einstiegLaden();
+    if (angemeldet() && e && e.alsGast && e.ergebnis && e.ergebnis.daten && e.ergebnis.daten.bewertet && (e.vorhaben || {}).beschreibung) {
+      try { ziel = "#/projekt/" + await einstiegAlsProjekt(e, e.ergebnis.daten); }
+      catch (f) { console.error("Einstieg konnte nicht übernommen werden", f); }
+    }
+    return (await gastAntragUebernehmen()) || ziel;
+  }
+  async function gastAntragUebernehmen() {
     const g = gastLaden();
     if (!g || !angemeldet() || !(g.pruefung || g.entwurf)) return null;
     try {
@@ -1149,6 +1222,552 @@
   }
 
   // ------------------------------------------------------------------
+  // Gemeinsame Bausteine für Einstieg, Arbeitsbereich und Projektseite
+  // ------------------------------------------------------------------
+  const GRUPPEN_TEXT = {
+    privatpersonen: "Haus, Wohnung, Energie, Familie",
+    gruendung: "Geschäftsidee, Gründung, erste Jahre",
+    unternehmen: "Investition, Innovation, Digitalisierung, Personal",
+    kommunen: "Ortsentwicklung, Infrastruktur, Klimaschutz",
+    oeffentlich: "Schulen, Kitas, soziale Einrichtungen",
+    vereine: "Vereinsleben, Ehrenamt, Kultur, Sport",
+    forschung: "Forschung, Transfer, Kooperationen",
+    bildung: "Bildungsangebote, Ausstattung, Weiterbildung",
+    landwirtschaft: "Hof, Betrieb, ländliche Entwicklung",
+  };
+  const EINSTIEG_SCHLUESSEL = "foerderkompass_einstieg";
+  function einstiegLaden() { try { return JSON.parse(localStorage.getItem(EINSTIEG_SCHLUESSEL) || "null"); } catch { return null; } }
+  function einstiegSpeichern(d) { try { localStorage.setItem(EINSTIEG_SCHLUESSEL, JSON.stringify(d)); } catch { /* privat */ } }
+  function einstiegLoeschen() { try { localStorage.removeItem(EINSTIEG_SCHLUESSEL); } catch { /* egal */ } }
+
+  function profilTextAus(o) {
+    if (!o) return "";
+    return [o.name && `Name: ${o.name}`, o.rechtsform && `Rechtsform: ${o.rechtsform}`,
+      o.mitarbeitende && `Mitarbeitende: ${o.mitarbeitende}`, o.taetigkeitsfeld && `Tätigkeitsfeld: ${o.taetigkeitsfeld}`,
+      o.beschreibung && `Über uns: ${o.beschreibung}`].filter(Boolean).join(". ");
+  }
+  function vorhabenText(v) {
+    return [v.titel, v.beschreibung, v.kosten_euro ? `Kosten etwa ${Number(v.kosten_euro).toLocaleString("de-DE")} Euro.` : ""]
+      .filter(Boolean).join(". ");
+  }
+  function empfehlungenAus(daten) {
+    return (daten.ergebnisse || []).map((p) => ({
+      id: p.id, titel: p.titel, kurztext: p.kurztext, foerderart: p.foerderart, foerdergeber: p.foerdergeber,
+      ebene: p.ebene, link: p.link, fristen: p.fristen, einstufung: p.einstufung, punkte: p.punkte,
+      begruendung: p.begruendung, offene_fragen: p.offene_fragen,
+    }));
+  }
+  async function empfehlungenSpeichern(projektId, daten) {
+    if (!angemeldet() || !daten || !daten.bewertet) return;
+    const empfehlungen = empfehlungenAus(daten);
+    const jetzt = new Date().toISOString();
+    try {
+      await sb.from("projekte").update({ empfehlungen, empfehlungen_am: jetzt }).eq("id", projektId).throwOnError();
+      const p = zustand.projekte.find((x) => x.id === projektId);
+      if (p) { p.empfehlungen = empfehlungen; p.empfehlungen_am = jetzt; }
+    } catch (f) { console.error("Empfehlungen nicht gespeichert", f); }
+  }
+
+  // Suche in zwei Stufen (schnelle Vorschau, dann KI-Bewertung) in einen Kasten
+  async function suchenUndZeigen(box, anfrage, { projektId = null, nachBewertung = null } = {}) {
+    const nummer = ++zustand.suchnummer;
+    box.replaceChildren(ladeanzeige("Der Kompass sucht passende Förderprogramme …"));
+    try {
+      const vorschau = await funktion("matching", { ...anfrage, nur_suche: true });
+      if (nummer !== zustand.suchnummer) return null;
+      const treffer = (vorschau.ergebnisse || []).length > 0;
+      ergebnisseZeigen(box, vorschau, projektId, { vorschau: treffer, fokus: false });
+      if (!treffer) return vorschau;
+      let bewertet;
+      try { bewertet = await funktion("matching", anfrage); } catch (_) { bewertet = { ...vorschau, bewertet: false }; }
+      if (nummer !== zustand.suchnummer) return null;
+      ergebnisseZeigen(box, bewertet, projektId, { fokus: false });
+      if (nachBewertung) await nachBewertung(bewertet);
+      return bewertet;
+    } catch (f) {
+      if (f.code === "limit_gast") {
+        box.replaceChildren(el("div", { class: "meldung hinweis", role: "alert" }, el("p", {}, f.message),
+          el("p", {}, el("a", { class: "knopf haupt", href: "#/anmelden" }, "Kostenloses Konto anlegen"))));
+      } else {
+        box.replaceChildren(meldung(fehlertext(f), f.code ? "hinweis" : "fehler"));
+      }
+      return null;
+    }
+  }
+
+  function anzahlText(n, eins, mehr) { return `${n} ${n === 1 ? eins : mehr}`; }
+
+  function hoehenlinienKopf() {
+    const kopf = el("header", { class: "kopf" });
+    kopf.innerHTML = `<svg class="hoehenlinien" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><g fill="none" stroke="#1d3a31" stroke-opacity=".09" stroke-width="1.4"><path d="M-20 250 C 120 200, 220 230, 330 170 S 560 90, 820 140"/><path d="M-20 222 C 110 176, 230 204, 340 146 S 560 66, 820 112"/><path d="M-20 194 C 100 152, 240 178, 350 122 S 565 44, 820 86"/><path d="M-20 166 C 95 130, 250 152, 362 100 S 570 26, 820 62"/><path d="M-20 138 C 90 108, 262 126, 376 80 S 578 12, 820 40"/><path d="M-20 110 C 88 88, 276 102, 392 62 S 590 2, 820 20"/><path d="M480 300 C 520 260, 600 250, 650 270 S 760 300, 820 280"/></g></svg>`;
+    return kopf;
+  }
+
+  // ------------------------------------------------------------------
+  // Seite: Startseite (öffentlich)
+  // ------------------------------------------------------------------
+  async function seiteLanding(main) {
+    const kopf = hoehenlinienKopf();
+    kopf.classList.add("landing");
+    kopf.append(el("div", { class: "seite breit landing-raster" },
+      el("div", {},
+        el("h1", {}, "Fördermittel für Ihr Vorhaben in Thüringen – gefunden in fünf Minuten."),
+        el("p", { class: "einleitung" }, "Der Kompass kennt die Förderprogramme des Landes, des Bundes, der EU und aller 15 LEADER-Regionen in Thüringen. Sie beantworten ein paar Fragen, die KI prüft jedes Programm für Sie und hilft beim Antrag."),
+        el("div", { class: "knoepfe", style: "margin-top:24px" },
+          el("a", { class: "knopf haupt gross", href: "#/start" }, "Kostenlos starten"),
+          el("a", { class: "knopf neben", href: "#/suche" }, "Direkt suchen")),
+        el("p", { class: "hilfe", style: "margin-top:14px" }, "Ohne Anmeldung ausprobieren. Ein Konto brauchen Sie erst zum Speichern.")),
+      beispielKarte()));
+    main.append(kopf);
+
+    const schritte = [
+      ["Erzählen Sie von sich", "Wer Sie sind und wo – oder geben Sie einfach Ihre Website an, die KI füllt den Rest aus."],
+      ["Beschreiben Sie Ihr Vorhaben", "In eigenen Worten. Noch keine konkrete Idee? Die KI schlägt förderfähige Projekte vor."],
+      ["Erhalten Sie Empfehlungen", "Jedes passende Programm mit Passung in Prozent, Begründung und offenen Fragen."],
+      ["Bereiten Sie den Antrag vor", "Der Assistent prüft die Voraussetzungen und schreibt einen ersten Entwurf – als Word oder PDF."],
+    ];
+    const leistungen = [
+      ["Regional statt nur bundesweit", "Neben Land, Bund und EU auch die Aufrufe der LEADER-Regionen und Regionalbudgets – das, was in Thüringen vor Ort wirklich zählt."],
+      ["Fördermittelwecker", "Speichern Sie Ihr Projekt, und wir melden uns jeden Montag, wenn ein neues passendes Programm dazukommt."],
+      ["Merkliste und Vergleich", "Programme mit Status und Notizen verwalten und nebeneinander vergleichen."],
+      ["Für alle, die Förderung suchen", "Privathaushalte, Gründer:innen, Unternehmen, Vereine, Kommunen, Bildung und Forschung."],
+    ];
+    main.append(el("div", { class: "seite breit" },
+      el("section", { class: "abschnitt" },
+        el("h2", {}, "So funktioniert's"),
+        el("ol", { class: "ablauf" }, schritte.map(([t, x]) => el("li", {}, el("h3", {}, t), el("p", {}, x))))),
+      el("section", { class: "abschnitt" },
+        el("h2", {}, "Was der Kompass für Sie tut"),
+        el("div", { class: "leistungen" }, leistungen.map(([t, x]) => el("div", {}, el("h3", {}, t), el("p", {}, x))))),
+      el("section", { class: "abschnitt aufruf" },
+        el("h2", {}, "Bereit?"),
+        el("p", {}, "Fünf Minuten, und Sie wissen, welche Förderung für Ihr Vorhaben infrage kommt."),
+        el("a", { class: "knopf haupt gross", href: "#/start" }, "Kostenlos starten"))));
+  }
+  function beispielKarte() {
+    return el("div", { class: "beispiel", "aria-hidden": "true" },
+      el("p", { class: "beispiel-titel" }, "Beispiel: Heimatverein im Landkreis Gotha"),
+      [["LEADER-Förderung Gotha-Ilm-Kreis-Erfurt", 92, "passt"], ["Regionalbudget für Kleinprojekte", 85, "passt"],
+       ["Solidarisches Zusammenleben der Generationen", 64, "passt_teilweise"]].map(([t, pz, e]) =>
+        el("div", { class: "beispiel-zeile " + e }, el("span", {}, t), passungAnzeige(pz))));
+  }
+
+  // ------------------------------------------------------------------
+  // Seite: Geführter Einstieg (#/start)
+  // ------------------------------------------------------------------
+  async function seiteEinstieg(main, r) {
+    const seite = el("div", { class: "seite" });
+    main.append(seite);
+    const s = einstiegLaden() || {};
+    s.organisation = s.organisation || {};
+    s.vorhaben = s.vorhaben || {};
+    const o = zustand.organisation;
+    if (angemeldet() && o && !s.organisation.zielgruppe) {
+      s.organisation = { name: o.name || "", zielgruppe: o.zielgruppe || "", rechtsform: o.rechtsform || "", landkreis: o.landkreis || "",
+        taetigkeitsfeld: o.taetigkeitsfeld || "", beschreibung: o.beschreibung || "", website: o.website || "" };
+    }
+    const neu = r.params.get("neu");
+    if (neu) { s.vorhaben = {}; s.ideen = null; s.ergebnis = null; }
+    let start = Number(r.params.get("schritt")) || s.schritt || 1;
+    if (start > 1 && !s.organisation.zielgruppe) start = 1;
+    if (start > 3 && !(s.vorhaben.beschreibung || "").trim()) start = 3;
+    const merken = () => einstiegSpeichern(s);
+
+    const TITEL = ["Wer sind Sie?", "Über Sie", "Ihr Vorhaben", "Ihre Empfehlungen"];
+    const leiste = el("ol", { class: "schritte", "aria-label": "Fortschritt" });
+    const bereich = el("div", { class: "einstieg" });
+    seite.append(el("div", { class: "seitenkopf" }, el("h1", { class: "klein" }, "Passende Förderung finden"),
+      el("p", {}, angemeldet() ? "In vier Schritten zu Ihren Empfehlungen." : "In vier Schritten zu Ihren persönlichen Empfehlungen – ohne Anmeldung.")),
+      leiste, bereich);
+
+    const gehe = (n) => {
+      s.schritt = n; merken();
+      leiste.replaceChildren(...TITEL.map((t, i) => el("li", { "aria-current": i + 1 === n ? "step" : null },
+        i + 1 < n ? el("button", { type: "button", class: "schritt-knopf", onclick: () => gehe(i + 1) }, `${i + 1}. ${t}`) : `${i + 1}. ${t}`)));
+      [null, schritt1, schritt2, schritt3, schritt4][n]();
+      window.scrollTo(0, 0);
+    };
+    const navi = (zurueck, weiterText, weiter) => el("div", { class: "knoepfe einstieg-navi" },
+      zurueck ? el("button", { type: "button", class: "neben", onclick: zurueck }, "Zurück") : null,
+      weiter ? el("button", { type: "submit", class: "haupt" }, weiterText) : null);
+
+    // Schritt 1: Wer sind Sie?
+    const schritt1 = () => {
+      bereich.replaceChildren(el("div", { class: "kacheln", role: "list" },
+        zustand.zielgruppen.map(([slug, name]) => el("button", {
+          type: "button", role: "listitem", class: "kachel" + (s.organisation.zielgruppe === slug ? " gewaehlt" : ""),
+          onclick: () => {
+            s.organisation.zielgruppe = slug;
+            if (slug === "privatpersonen" && !s.organisation.rechtsform) s.organisation.rechtsform = "Privatperson";
+            gehe(2);
+          },
+        }, el("span", { class: "kachel-titel" }, name), el("span", { class: "kachel-text" }, GRUPPEN_TEXT[slug] || "")))));
+    };
+
+    // Schritt 2: Über Sie (mit Website-Auslesen)
+    const schritt2 = () => {
+      const og = s.organisation;
+      const auswahl = (id, werte, wert, leer) => {
+        const sel = el("select", { id }, el("option", { value: "" }, leer),
+          werte.map((w) => { const [v, t] = Array.isArray(w) ? w : [w, w]; return el("option", { value: v }, t); }));
+        sel.value = wert || ""; return sel;
+      };
+      const f = {
+        name: el("input", { type: "text", id: "e-name", maxlength: "200", value: og.name || "", placeholder: og.zielgruppe === "privatpersonen" ? "optional" : "z. B. Heimatverein Musterdorf e. V." }),
+        landkreis: auswahl("e-landkreis", LANDKREISE, og.landkreis, "Bitte wählen"),
+        rechtsform: auswahl("e-rechtsform", RECHTSFORMEN, og.rechtsform, "Bitte wählen"),
+        feld: el("input", { type: "text", id: "e-feld", maxlength: "300", value: og.taetigkeitsfeld || "", placeholder: "z. B. Jugendarbeit, Bäckerei, Maschinenbau" }),
+        beschreibung: el("textarea", { id: "e-beschreibung", maxlength: "2000", placeholder: "Was machen Sie, für wen, seit wann? Zwei, drei Sätze genügen." }, og.beschreibung || ""),
+      };
+      const url = el("input", { type: "url", id: "e-url", value: og.website || "", placeholder: "www.ihre-website.de", inputmode: "url" });
+      const urlKnopf = el("button", { type: "button", class: "neben" }, "Website auslesen");
+      const urlRueck = el("div", { "aria-live": "polite" });
+      urlKnopf.addEventListener("click", async () => {
+        if (!url.value.trim()) { urlRueck.replaceChildren(el("p", { class: "formfehler" }, "Bitte geben Sie eine Website-Adresse ein.")); return; }
+        urlKnopf.disabled = true;
+        urlRueck.replaceChildren(ladeanzeige("Die KI liest Ihre Website …"));
+        try {
+          const { profil } = await funktion("ideen", { aktion: "website", url: url.value.trim() });
+          if (profil.name) f.name.value = profil.name;
+          if (profil.landkreis) f.landkreis.value = profil.landkreis;
+          if (profil.rechtsform) f.rechtsform.value = profil.rechtsform;
+          if (profil.taetigkeitsfeld) f.feld.value = profil.taetigkeitsfeld;
+          if (profil.beschreibung) f.beschreibung.value = profil.beschreibung;
+          if (profil.zielgruppe && profil.zielgruppe !== og.zielgruppe) og.zielgruppe_vorschlag = profil.zielgruppe;
+          og.website = profil.website || url.value.trim();
+          urlRueck.replaceChildren(el("p", { class: "erfolg" }, "Übernommen – bitte kurz prüfen und bei Bedarf anpassen."));
+        } catch (fe) {
+          urlRueck.replaceChildren(...(fe.code === "limit_gast" ? assistentFehler(fe) : [el("p", { class: "formfehler" }, fehlertext(fe))]));
+        }
+        urlKnopf.disabled = false;
+      });
+      const zeile = (id, text, feld, hilfe) => el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: id }, text), hilfe ? el("p", { class: "hilfe" }, hilfe) : null, feld);
+      const fehler = el("p", { class: "formfehler", role: "alert" });
+      const form = el("form", { class: "flaeche", novalidate: true },
+        el("div", { class: "website-kasten" },
+          el("label", { class: "titel", for: "e-url" }, "Haben Sie eine Website?"),
+          el("p", { class: "hilfe" }, "Dann füllt die KI die Angaben unten für Sie aus."),
+          el("div", { class: "zeile-mit-knopf" }, url, urlKnopf), urlRueck),
+        el("div", { class: "raster" },
+          zeile("e-name", "Name", f.name),
+          zeile("e-landkreis", "Landkreis / Stadt", f.landkreis),
+          zeile("e-rechtsform", "Rechtsform", f.rechtsform),
+          zeile("e-feld", "Tätigkeitsfeld", f.feld)),
+        zeile("e-beschreibung", "Kurz über Sie", f.beschreibung, "Hilft der KI, passende Programme und Ideen zu finden."),
+        fehler,
+        navi(() => { leseFelder(); gehe(1); }, "Weiter", true));
+      const leseFelder = () => {
+        Object.assign(og, { name: f.name.value.trim(), landkreis: f.landkreis.value, rechtsform: f.rechtsform.value,
+          taetigkeitsfeld: f.feld.value.trim(), beschreibung: f.beschreibung.value.trim() });
+        merken();
+      };
+      form.addEventListener("submit", (ev) => {
+        ev.preventDefault(); leseFelder();
+        if (!og.landkreis) { fehler.textContent = "Bitte wählen Sie Ihren Landkreis oder Ihre Stadt."; f.landkreis.focus(); return; }
+        gehe(3);
+      });
+      bereich.replaceChildren(form);
+    };
+
+    // Schritt 3: Vorhaben – eigene Idee oder KI-Vorschläge
+    const schritt3 = () => {
+      const v = s.vorhaben;
+      const modus = s.modus || "idee";
+      const wahl = el("div", { class: "wahl", role: "radiogroup", "aria-label": "Wie möchten Sie weitermachen?" },
+        [["idee", "Ich habe schon eine Idee", "Beschreiben Sie Ihr Vorhaben in eigenen Worten."],
+         ["vorschlag", "Schlagen Sie mir Ideen vor", "Die KI entwickelt förderfähige Projekte passend zu Ihnen."]].map(([wert, titel, text]) =>
+          el("button", { type: "button", role: "radio", "aria-checked": modus === wert ? "true" : "false", class: "wahl-karte",
+            onclick: () => { s.modus = wert; merken(); schritt3(); } },
+            el("span", { class: "kachel-titel" }, titel), el("span", { class: "kachel-text" }, text))));
+      const inhalt = el("div");
+      bereich.replaceChildren(wahl, inhalt);
+
+      if (modus === "idee") {
+        const titel = el("input", { type: "text", id: "v-titel", maxlength: "200", value: v.titel || "", placeholder: "z. B. Spielplatz am Dorfteich" });
+        const text = el("textarea", { id: "v-text", maxlength: "4000", placeholder: "Was soll entstehen? Wer profitiert? Bis wann?" }, v.beschreibung || "");
+        const kosten = el("input", { type: "number", id: "v-kosten", min: "0", step: "100", value: v.kosten_euro || "" });
+        const fehler = el("p", { class: "formfehler", role: "alert" });
+        const form = el("form", { class: "flaeche", novalidate: true },
+          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-titel" }, "Titel (optional)"), titel),
+          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-text" }, "Was haben Sie vor?"), text),
+          el("div", { class: "feldgruppe", style: "max-width:260px" }, el("label", { class: "feld", for: "v-kosten" }, "Geschätzte Kosten in Euro (optional)"), kosten),
+          fehler, navi(() => gehe(2), "Empfehlungen anzeigen", true));
+        form.addEventListener("submit", (ev) => {
+          ev.preventDefault();
+          if (text.value.trim().length < 15) { fehler.textContent = "Bitte beschreiben Sie Ihr Vorhaben in ein, zwei Sätzen."; text.focus(); return; }
+          s.vorhaben = { titel: titel.value.trim(), beschreibung: text.value.trim(), kosten_euro: kosten.value ? Number(kosten.value) : null };
+          s.ergebnis = null; merken(); gehe(4);
+        });
+        inhalt.append(form);
+        return;
+      }
+
+      // KI-Projektideen
+      const wunsch = el("input", { type: "text", id: "v-wunsch", maxlength: "300", value: s.wunsch || "", placeholder: "optional, z. B. Energie sparen, Jugendarbeit, Digitalisierung" });
+      const knopf = el("button", { type: "button", class: "haupt" }, s.ideen ? "Neue Ideen entwickeln" : "Ideen entwickeln");
+      const ideenBox = el("div", { "aria-live": "polite" });
+      const zeigeIdeen = () => {
+        ideenBox.replaceChildren(...(s.ideen || []).map((i) => el("article", { class: "idee" },
+          el("h3", {}, i.titel),
+          el("p", {}, i.beschreibung),
+          i.nutzen ? el("p", { class: "kurz" }, i.nutzen) : null,
+          (i.themen || []).length ? el("ul", { class: "arten" }, i.themen.map((t) => el("li", {}, t))) : null,
+          (i.programme || []).length ? el("p", { class: "idee-programme" }, el("strong", {}, "Zum Beispiel: "),
+            i.programme.flatMap((p, n) => [n ? " · " : "", el("a", { href: "#/programm/" + p.id }, p.titel)])) : null,
+          el("button", { type: "button", class: "haupt", onclick: () => {
+            s.vorhaben = { titel: i.titel, beschreibung: i.beschreibung, kosten_euro: null };
+            s.modus = "idee"; s.ergebnis = null; merken(); gehe(4);
+          } }, "Mit dieser Idee weiter"))));
+      };
+      knopf.addEventListener("click", async () => {
+        s.wunsch = wunsch.value.trim(); merken();
+        knopf.disabled = true;
+        ideenBox.replaceChildren(ladeanzeige("Die KI entwickelt Projektideen für Sie. Das dauert etwa 15 Sekunden …"));
+        try {
+          const og = s.organisation;
+          const { ideen } = await funktion("ideen", { aktion: "ideen", wunsch: s.wunsch,
+            organisation: { ...og, zielgruppe_name: gruppenName(og.zielgruppe) } });
+          s.ideen = ideen; merken(); zeigeIdeen();
+          knopf.textContent = "Neue Ideen entwickeln";
+        } catch (fe) {
+          ideenBox.replaceChildren(...assistentFehler(fe, () => knopf.click()));
+        }
+        knopf.disabled = false;
+      });
+      inhalt.append(el("div", { class: "flaeche" },
+        el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-wunsch" }, "Worum soll es gehen?"), wunsch),
+        el("div", { class: "knoepfe" }, el("button", { type: "button", class: "neben", onclick: () => gehe(2) }, "Zurück"), knopf)),
+        ideenBox);
+      if (s.ideen) zeigeIdeen();
+    };
+
+    // Schritt 4: Empfehlungen
+    const schritt4 = async () => {
+      const og = s.organisation, v = s.vorhaben;
+      const zusammenfassung = el("div", { class: "flaeche zusammenfassung-kasten" },
+        el("p", { class: "meta" }, [gruppenName(og.zielgruppe), og.name, og.landkreis].filter(Boolean).join(" · ")),
+        el("h2", {}, v.titel || "Ihr Vorhaben"),
+        el("p", {}, v.beschreibung),
+        el("button", { type: "button", class: "leise", onclick: () => gehe(3) }, "Vorhaben ändern"));
+      const box = el("div", { id: "ergebnisse", "aria-live": "polite" });
+      const sichern = el("div");
+      bereich.replaceChildren(zusammenfassung, sichern, box);
+
+      const sichernZeigen = (daten) => {
+        if (!daten || !(daten.ergebnisse || []).length) { sichern.replaceChildren(); return; }
+        if (angemeldet()) {
+          if (s.gespeichertesProjekt) {
+            sichern.replaceChildren(el("div", { class: "meldung" }, el("p", {}, "Gespeichert als Projekt. ",
+              el("a", { href: "#/projekt/" + s.gespeichertesProjekt }, "Zum Projekt"))));
+            return;
+          }
+          const k = el("button", { type: "button", class: "haupt" }, "Als Projekt speichern");
+          k.addEventListener("click", async () => {
+            k.disabled = true;
+            try {
+              const id = await einstiegAlsProjekt(s, daten);
+              location.hash = "#/projekt/" + id;
+            } catch (fe) { k.disabled = false; alertFrei(k, fehlertext(fe)); }
+          });
+          sichern.replaceChildren(el("div", { class: "sichern-kasten" },
+            el("div", {}, el("strong", {}, "Projekt speichern"), el("p", {}, "Empfehlungen behalten und jeden Montag über neue passende Programme informiert werden.")), k));
+        } else {
+          sichern.replaceChildren(el("div", { class: "sichern-kasten" },
+            el("div", {}, el("strong", {}, "Ergebnisse sichern – kostenlos"),
+              el("p", {}, "Mit einem Konto speichern wir Ihr Profil, dieses Projekt und die Empfehlungen. Der Fördermittelwecker meldet sich, wenn neue passende Programme dazukommen.")),
+            el("a", { class: "knopf haupt", href: "#/anmelden" }, "Kostenlos speichern")));
+        }
+      };
+
+      const anfrage = {
+        vorhaben: vorhabenText(v), zielgruppe: og.zielgruppe || null, zielgruppe_name: gruppenName(og.zielgruppe),
+        standort: og.landkreis || "", profil: profilTextAus(og),
+      };
+      const schluessel = JSON.stringify(anfrage);
+      if (s.ergebnis && s.ergebnis.schluessel === schluessel && s.ergebnis.daten && s.ergebnis.daten.bewertet) {
+        ergebnisseZeigen(box, s.ergebnis.daten, null, { fokus: false });
+        sichernZeigen(s.ergebnis.daten);
+        return;
+      }
+      s.gespeichertesProjekt = null;
+      await suchenUndZeigen(box, anfrage, { nachBewertung: async (daten) => {
+        s.ergebnis = { schluessel, daten }; s.alsGast = !angemeldet(); merken();
+        sichernZeigen(daten);
+      } });
+    };
+
+    gehe(start);
+  }
+
+  async function einstiegAlsProjekt(s, daten) {
+    const og = s.organisation || {};
+    const profilFelder = { name: og.name || null, zielgruppe: og.zielgruppe || null, rechtsform: og.rechtsform || null,
+      landkreis: og.landkreis || null, taetigkeitsfeld: og.taetigkeitsfeld || null, beschreibung: og.beschreibung || null,
+      website: og.website || null };
+    if (!zustand.organisation) {
+      const { data } = await sb.from("organisationen").insert(profilFelder).select().single().throwOnError();
+      zustand.organisation = data;
+    } else {
+      // nur leere Felder ergänzen, nichts Vorhandenes überschreiben
+      const ergaenzen = {};
+      for (const [k, w] of Object.entries(profilFelder)) if (w && !zustand.organisation[k]) ergaenzen[k] = w;
+      if (Object.keys(ergaenzen).length) {
+        const { data } = await sb.from("organisationen").update(ergaenzen).eq("id", zustand.organisation.id).select().single().throwOnError();
+        zustand.organisation = data;
+      }
+    }
+    const v = s.vorhaben || {};
+    const { data: pr } = await sb.from("projekte").insert({
+      titel: v.titel || v.beschreibung.slice(0, 60), beschreibung: v.beschreibung, kosten_euro: v.kosten_euro || null,
+    }).select("id,titel,beschreibung,kosten_euro,beginn,wecker_aktiv,erstellt_am,aktualisiert_am").single().throwOnError();
+    zustand.projekte.unshift(pr);
+    if (daten && daten.bewertet) await empfehlungenSpeichern(pr.id, daten);
+    s.gespeichertesProjekt = pr.id;
+    einstiegLoeschen();
+    return pr.id;
+  }
+
+  // ------------------------------------------------------------------
+  // Seite: Arbeitsbereich (Übersicht nach der Anmeldung)
+  // ------------------------------------------------------------------
+  async function seiteArbeitsbereich(main) {
+    const seite = el("div", { class: "seite breit" });
+    main.append(seite);
+    if (!angemeldet()) { location.hash = "#/"; return; }
+    const o = zustand.organisation || {};
+    const { data: projekte } = await sb.from("projekte").select("id,titel,beschreibung,kosten_euro,wecker_aktiv,empfehlungen,empfehlungen_am,erstellt_am").order("erstellt_am", { ascending: false });
+    const { data: antraege } = await sb.from("antraege").select("id,programm_id,entwurf,pruefung,aktualisiert_am").order("aktualisiert_am", { ascending: false }).limit(5);
+    const merkIds = [...new Set(zustand.merkliste.map((m) => m.programm_id))].slice(0, 50);
+    const programme = merkIds.length ? ((await sb.rpc("programm_details", { ids: merkIds })).data || []) : [];
+    const progNach = new Map(programme.map((p) => [p.id, p]));
+    const antragProgramme = (antraege || []).length ? ((await sb.rpc("programm_details", { ids: [...new Set(antraege.map((a) => a.programm_id))] })).data || []) : [];
+    const antragProgNach = new Map(antragProgramme.map((p) => [p.id, p]));
+
+    // Nächste Schritte
+    const schritte = [];
+    const profilFelder = ["name", "zielgruppe", "landkreis", "rechtsform", "beschreibung"];
+    const fehlend = profilFelder.filter((k) => !o[k]).length;
+    if (fehlend) schritte.push(["Profil vervollständigen", `${profilFelder.length - fehlend} von ${profilFelder.length} Angaben ausgefüllt – je vollständiger, desto genauer die Empfehlungen.`, "#/profil", "Profil öffnen"]);
+    if (!(projekte || []).length) schritte.push(["Erstes Projekt anlegen", "Beschreiben Sie Ihr Vorhaben oder lassen Sie sich Ideen vorschlagen.", "#/start?schritt=3&neu=1", "Los geht's"]);
+    for (const p of (projekte || []).filter((x) => !x.empfehlungen).slice(0, 2)) {
+      schritte.push([`Empfehlungen für „${p.titel}“`, "Für dieses Projekt wurden noch keine Programme geprüft.", "#/projekt/" + p.id, "Jetzt prüfen"]);
+    }
+    for (const a of (antraege || []).filter((x) => !x.entwurf).slice(0, 2)) {
+      const pr = antragProgNach.get(a.programm_id);
+      schritte.push(["Antrag fortsetzen", pr ? pr.titel : "Begonnener Antrag", `#/assistent/${a.programm_id}?antrag=${a.id}`, "Fortsetzen"]);
+    }
+    const mitFrist = zustand.merkliste.filter((m) => !["abgelehnt", "bewilligt", "beantragt"].includes(m.status))
+      .map((m) => progNach.get(m.programm_id)).filter((p) => p && p.fristen).slice(0, 3);
+    for (const p of mitFrist) schritte.push([`Frist beachten: ${p.titel}`, kuerzen(p.fristen, 140), "#/programm/" + p.id, "Ansehen"]);
+
+    const gruss = o.name ? `Willkommen zurück, ${o.name}` : "Willkommen in Ihrem Arbeitsbereich";
+    seite.append(el("div", { class: "seitenkopf" }, el("h1", { class: "klein" }, gruss),
+      el("p", {}, [anzahlText((projekte || []).length, "Projekt", "Projekte"),
+        anzahlText(zustand.merkliste.length, "gemerktes Programm", "gemerkte Programme"),
+        (antraege || []).length ? anzahlText(antraege.length, "Antrag in Arbeit", "Anträge in Arbeit") : "noch keine Anträge"].join(" · "))));
+
+    if (schritte.length) {
+      seite.append(el("section", { class: "flaeche naechste" }, el("h2", {}, "Nächste Schritte"),
+        el("ul", { class: "schrittliste" }, schritte.slice(0, 6).map(([t, x, href, knopf]) =>
+          el("li", {}, el("div", {}, el("strong", {}, t), el("p", {}, x)), el("a", { class: "knopf neben", href }, knopf))))));
+    }
+
+    // Projekte mit Empfehlungen
+    const projektBereich = el("section", { class: "abschnitt-innen" },
+      el("div", { class: "kopfzeile" }, el("h2", {}, "Ihre Projekte"),
+        el("a", { class: "knopf neben", href: "#/start?schritt=3&neu=1" }, "Neues Vorhaben")));
+    if (!(projekte || []).length) {
+      projektBereich.append(meldung("Noch keine Projekte. Starten Sie mit „Neues Vorhaben“."));
+    } else {
+      projektBereich.append(el("div", { class: "projektraster" }, projekte.map((p) => {
+        const e = p.empfehlungen || [];
+        const gut = e.filter((x) => x.einstufung === "passt").length;
+        const teils = e.filter((x) => x.einstufung === "passt_teilweise").length;
+        const top = e.filter((x) => x.einstufung !== "passt_nicht").sort((a, b) => (b.punkte ?? 0) - (a.punkte ?? 0)).slice(0, 3);
+        return el("article", { class: "projektkarte" },
+          el("h3", {}, el("a", { href: "#/projekt/" + p.id }, p.titel)),
+          el("p", { class: "meta" }, [p.wecker_aktiv ? "Wecker an" : "Wecker aus",
+            p.empfehlungen_am ? `geprüft am ${datum(p.empfehlungen_am)}` : "noch nicht geprüft"].join(" · ")),
+          e.length ? el("p", { class: "zahlen" }, el("span", { class: "punkt passt" }), ` ${gut} passen gut  `,
+            el("span", { class: "punkt passt_teilweise" }), ` ${teils} möglicherweise`) : null,
+          top.length ? el("ul", { class: "top-liste" }, top.map((x) => el("li", {},
+            el("a", { href: "#/programm/" + x.id }, x.titel), passungAnzeige(x.punkte)))) :
+            el("p", { class: "kurz" }, kuerzen(p.beschreibung, 160)),
+          el("a", { class: "knopf " + (e.length ? "neben" : "haupt"), href: "#/projekt/" + p.id }, e.length ? "Alle Empfehlungen" : "Empfehlungen ermitteln"));
+      })));
+    }
+    seite.append(projektBereich);
+
+    // Merkliste und Anträge
+    const zaehl = (st) => zustand.merkliste.filter((m) => m.status === st).length;
+    seite.append(el("div", { class: "zweispaltig" },
+      el("section", { class: "flaeche" }, el("h2", {}, "Merkliste"),
+        zustand.merkliste.length
+          ? el("ul", { class: "statuszahlen" }, MERK_STATUS.filter(([st]) => zaehl(st)).map(([st, t]) =>
+              el("li", {}, el("span", {}, t), el("strong", {}, String(zaehl(st))))))
+          : el("p", { class: "kurz" }, "Noch nichts gemerkt."),
+        el("a", { class: "knopf neben", href: "#/merkliste" }, "Zur Merkliste")),
+      el("section", { class: "flaeche" }, el("h2", {}, "Anträge in Arbeit"),
+        (antraege || []).length
+          ? el("ul", { class: "einfache-liste" }, antraege.slice(0, 4).map((a) => {
+              const pr = antragProgNach.get(a.programm_id);
+              return el("li", {}, el("a", { href: `#/assistent/${a.programm_id}?antrag=${a.id}` },
+                (a.entwurf && a.entwurf.titel) || (pr && pr.titel) || "Antrag"),
+                el("span", { class: "meta" }, a.entwurf ? " – Entwurf fertig" : " – Voraussetzungen geprüft"));
+            }))
+          : el("p", { class: "kurz" }, "Öffnen Sie eine Empfehlung und klicken Sie auf „Antrag vorbereiten“."),
+        el("a", { class: "knopf neben", href: "#/antraege" }, "Alle Anträge"))));
+  }
+
+  // ------------------------------------------------------------------
+  // Seite: Projekt mit Empfehlungen
+  // ------------------------------------------------------------------
+  async function seiteProjekt(main, r) {
+    const id = r.teile[1];
+    const seite = el("div", { class: "seite" });
+    main.append(seite);
+    if (!angemeldet()) { location.hash = "#/anmelden"; return; }
+    const { data: p } = await sb.from("projekte").select("*").eq("id", id).maybeSingle();
+    if (!p) { seite.append(seitenkopf("Projekt nicht gefunden"), meldung("Dieses Projekt gibt es nicht (mehr).")); return; }
+    const o = zustand.organisation || {};
+    const wecker = el("input", { type: "checkbox" }); wecker.checked = p.wecker_aktiv;
+    wecker.addEventListener("change", async () => {
+      await sb.from("projekte").update({ wecker_aktiv: wecker.checked }).eq("id", p.id);
+      const z = zustand.projekte.find((x) => x.id === p.id); if (z) z.wecker_aktiv = wecker.checked;
+    });
+    const box = el("div", { id: "ergebnisse", "aria-live": "polite" });
+    const stand = el("p", { class: "meta" });
+    const aktualisieren = el("button", { type: "button", class: "neben" }, "Neu prüfen");
+    const pruefen = async () => {
+      aktualisieren.disabled = true;
+      await suchenUndZeigen(box, {
+        vorhaben: vorhabenText(p), zielgruppe: o.zielgruppe || null, zielgruppe_name: gruppenName(o.zielgruppe),
+        standort: o.landkreis || "", profil: profilTextAus(o), projekt_id: p.id,
+      }, { projektId: p.id, nachBewertung: async (daten) => {
+        await empfehlungenSpeichern(p.id, daten);
+        stand.textContent = "Geprüft am " + datum(new Date());
+      } });
+      aktualisieren.disabled = false;
+    };
+    aktualisieren.addEventListener("click", pruefen);
+    seite.append(
+      el("div", { class: "seitenkopf" }, el("p", { class: "meta" }, el("a", { href: "#/projekte" }, "Projekte"), " / ", p.titel),
+        el("h1", { class: "klein" }, p.titel), el("p", {}, p.beschreibung)),
+      el("div", { class: "projektleiste" },
+        el("label", { class: "schalter" }, wecker, "Fördermittelwecker"),
+        el("a", { href: "#/merkliste?projekt=" + p.id }, "Merkliste dieses Projekts"),
+        el("a", { href: "#/projekte" }, "Projekt bearbeiten"),
+        el("span", { class: "abstand" }), stand, aktualisieren),
+      box);
+    if (p.empfehlungen && p.empfehlungen.length && !r.params.get("neu")) {
+      stand.textContent = "Geprüft am " + datum(p.empfehlungen_am);
+      ergebnisseZeigen(box, { ergebnisse: p.empfehlungen, bewertet: true }, p.id, { fokus: false });
+    } else {
+      await pruefen();
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Start
   // ------------------------------------------------------------------
   async function start() {
@@ -1162,7 +1781,7 @@
         await kontoLaden();
         if (ereignis === "SIGNED_IN") {
           const ziel = await gastUebernehmen();
-          location.hash = ziel || (zustand.organisation ? "#/projekte" : "#/profil");
+          location.hash = ziel || "#/arbeitsbereich";
           return;
         }
         zeigen();
@@ -1174,7 +1793,7 @@
       if (ziel) { location.hash = ziel; return; }
     }
     if (kamVomAnmeldelink && zustand.sitzung) {
-      location.hash = zustand.organisation ? "#/projekte" : "#/profil";
+      location.hash = "#/arbeitsbereich";
       return;
     }
     zeigen();
