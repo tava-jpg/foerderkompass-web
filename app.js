@@ -152,9 +152,10 @@
     const [o, p, m] = await Promise.all([
       sb.from("organisationen").select("*").maybeSingle(),
       sb.from("projekte").select("id,titel,beschreibung,kosten_euro,beginn,wecker_aktiv,erstellt_am,aktualisiert_am").order("erstellt_am", { ascending: false }),
-      sb.from("merkliste").select("id,programm_id,projekt_id,status,notiz,einstufung,begruendung,aktualisiert_am"),
+      sb.from("merkliste").select("id,programm_id,projekt_id,status,notiz,einstufung,begruendung,max_euro,frist_datum,aktualisiert_am"),
     ]);
     zustand.organisation = o.data || null;
+    try { zustand.betreiber = Boolean((await sb.rpc("ist_betreiber")).data); } catch { zustand.betreiber = false; }
     zustand.projekte = p.data || [];
     zustand.merkliste = m.data || [];
   }
@@ -191,6 +192,7 @@
       ["#/suche", "Freie Suche", null, ["#/suche"]],
       ["#/profil", "Profil", null, ["#/profil"]],
     ];
+    if (zustand.betreiber) punkte.push(["#/betreiber", "Expertenanfragen", null, ["#/betreiber"]]);
     return el("nav", { class: "seitenleiste", "aria-label": "Arbeitsbereich" },
       el("ul", {}, punkte.map(([href, text, zahl, pfade]) =>
         el("li", {}, el("a", { href, "aria-current": pfade.includes(aktuell) ? "page" : null },
@@ -211,7 +213,7 @@
     menueZeigen(r.pfad);
     const seiten = {
       "#/": angemeldet() ? seiteArbeitsbereich : seiteLanding, "#/start": seiteEinstieg, "#/suche": seiteSuche,
-      "#/arbeitsbereich": seiteArbeitsbereich, "#/projekt": seiteProjekt,
+      "#/arbeitsbereich": seiteArbeitsbereich, "#/projekt": seiteProjekt, "#/betreiber": seiteBetreiber,
       "#/anmelden": seiteAnmelden, "#/abmelden": seiteAbmelden, "#/profil": seiteProfil,
       "#/projekte": seiteProjekte, "#/merkliste": seiteMerkliste, "#/vergleich": seiteVergleich,
       "#/programm": seiteProgramm, "#/assistent": seiteAssistent, "#/antraege": seiteAntraege,
@@ -264,6 +266,7 @@
           } else {
             const { data } = await sb.from("merkliste").insert({
               programm_id: p.id, projekt_id: projektId, einstufung: p.einstufung || null, begruendung: p.begruendung || null,
+              max_euro: p.max_euro || null, frist_datum: p.frist_datum || null,
             }).select().single().throwOnError();
             zustand.merkliste.push(data);
           }
@@ -282,11 +285,26 @@
         el("h4", {}, el("a", { href: "#/programm/" + p.id }, p.titel)),
         passungAnzeige(p.punkte)),
       herkunft ? el("p", { class: "herkunft" }, herkunft) : null,
-      arten,
+      (arten || p.max_euro) ? el("div", { class: "kartenmerkmale" }, arten,
+        p.max_euro ? el("span", { class: "betrag" }, "bis zu " + euro(p.max_euro)) : null) : null,
       p.begruendung ? el("p", { class: "begruendung" }, p.begruendung) : el("p", { class: "kurz" }, kuerzen(p.kurztext, 320)),
       p.offene_fragen ? el("p", { class: "offen" }, el("strong", {}, "Noch zu klären: "), p.offene_fragen) : null,
-      p.fristen ? el("p", { class: "frist" }, el("strong", {}, "Frist: "), kuerzen(p.fristen, 200)) : null,
+      fristText(p) ? el("p", { class: "frist" + (p.frist_datum ? " mit-datum" : "") }, el("strong", {}, "Frist: "), fristText(p)) : null,
       fuss);
+  }
+  function euro(n) { return Number(n).toLocaleString("de-DE", { maximumFractionDigits: 0 }) + " €"; }
+  function fristText(p) {
+    if (p.frist_datum) {
+      const tage = Math.round((new Date(p.frist_datum + "T12:00:00") - new Date()) / 86400000);
+      return `${datum(p.frist_datum)}${tage <= 30 ? ` – noch ${tage <= 0 ? "heute" : tage === 1 ? "1 Tag" : tage + " Tage"}` : ""}`;
+    }
+    return p.fristen ? kuerzen(p.fristen, 200) : "";
+  }
+  function potenzial(liste) {
+    const passend = (liste || []).filter((p) => ["passt", "passt_teilweise"].includes(p.einstufung));
+    const mitBetrag = passend.filter((p) => p.max_euro);
+    return { summe: mitBetrag.reduce((a, p) => a + Number(p.max_euro), 0), anzahl: passend.length, mitBetrag: mitBetrag.length,
+      hoechster: mitBetrag.reduce((a, p) => Math.max(a, Number(p.max_euro)), 0) };
   }
   function passungAnzeige(punkte) {
     if (punkte === null || punkte === undefined) return null;
@@ -451,6 +469,14 @@
     else if (teils) satz = `${teils} ${teils === 1 ? "Programm kommt" : "Programme kommen"} möglicherweise infrage`;
     else satz = "Kein Programm passt eindeutig";
     box.append(el("h2", { class: "zusammenfassung", tabindex: "-1", id: "ergebnis-titel" }, satz));
+    const pot = daten.bewertet && !vorschau ? potenzial(liste) : null;
+    if (pot && pot.summe > 0) {
+      box.append(el("div", { class: "potenzial" },
+        el("div", {}, el("span", { class: "potenzial-label" }, "Ihr Förderpotenzial"),
+          el("strong", { class: "potenzial-summe" }, "bis zu " + euro(pot.summe))),
+        el("p", {}, `Summe der Höchstbeträge von ${pot.mitBetrag} der ${pot.anzahl} passenden Programme, bei denen ein Betrag genannt ist. `,
+          "Ob sich Programme kombinieren lassen, klären Sie bitte mit dem Fördergeber.")));
+    }
     if (vorschau) {
       const h = el("div", { class: "status pruefung" }); h.innerHTML = NADEL;
       h.append(el("span", {}, "Die KI prüft jetzt jedes Programm einzeln und sortiert nach „passt gut“, „passt möglicherweise“ und „passt eher nicht“. Das dauert noch einige Sekunden."));
@@ -893,7 +919,9 @@
       }
       let projektId = null;
       const v = g.vorhaben || {};
-      if ((v.beschreibung || "").trim().length >= 15) {
+      const gleich = zustand.projekte.find((p) => (p.beschreibung || "").trim() === (v.beschreibung || "").trim());
+      if (gleich) projektId = gleich.id;
+      else if ((v.beschreibung || "").trim().length >= 15) {
         const { data } = await sb.from("projekte").insert({
           titel: (v.titel || "").trim() || v.beschreibung.slice(0, 60), beschreibung: v.beschreibung,
           kosten_euro: v.kosten_euro || null,
@@ -906,7 +934,7 @@
         antworten: g.antworten || null, entwurf: g.entwurf || null,
       }).select().single().throwOnError();
       gastLoeschen();
-      return `#/assistent/${g.programm_id}?antrag=${a.id}`;
+      return `#/assistent/${g.programm_id}?antrag=${a.id}${g.expertenWunsch ? "&experte=1" : ""}`;
     } catch (f) {
       console.error("Gast-Entwurf konnte nicht übernommen werden", f);
       return null;
@@ -939,10 +967,14 @@
     if (gast) {
       const alt = gastLaden() || {};
       const suche = (zustand.letzteSuche && zustand.letzteSuche.anfrage) || {};
+      const ein = einstiegLaden() || {};
+      const ev = ein.vorhaben || {}, eo = ein.organisation || {};
       gastDaten = alt.programm_id === programmId ? alt : {
         programm_id: programmId,
-        vorhaben: alt.vorhaben || { titel: "", beschreibung: suche.vorhaben || "", kosten_euro: null },
-        organisation: alt.organisation || { zielgruppe: suche.zielgruppe || "", landkreis: "", rechtsform: "", name: "" },
+        vorhaben: (ev.beschreibung && { titel: ev.titel || "", beschreibung: ev.beschreibung, kosten_euro: ev.kosten_euro || null })
+          || alt.vorhaben || { titel: "", beschreibung: suche.vorhaben || "", kosten_euro: null },
+        organisation: (eo.zielgruppe && { zielgruppe: eo.zielgruppe, landkreis: eo.landkreis || "", rechtsform: eo.rechtsform || "", name: eo.name || "" })
+          || alt.organisation || { zielgruppe: suche.zielgruppe || "", landkreis: "", rechtsform: "", name: "" },
       };
     }
 
@@ -1125,6 +1157,73 @@
             el("button", { type: "button", class: "neben", onclick: () => alsPdf(aktueller(), programm) }, "Als PDF drucken"),
             el("button", { type: "button", class: "leise", onclick: () => schritt2(gast ? gastDaten.pruefung : antrag && antrag.pruefung) }, "Zurück zu den Rückfragen"),
             status)));
+      bereich.append(expertenBereich(aktueller));
+      if (r.params.get("experte")) setTimeout(() => { const k = $("#experten-knopf"); if (k) { k.click(); k.scrollIntoView({ block: "center" }); } }, 50);
+    };
+
+    // Expertenprüfung anfragen
+    const expertenBereich = (aktueller) => {
+      const kasten = el("section", { class: "experten-kasten", "aria-live": "polite" });
+      const kopf = el("div", { class: "experten-kopf" });
+      kopf.innerHTML = (window.BILDER && window.BILDER.experte) || "";
+      const text = el("div", {},
+        el("h2", {}, "Von einem Förderexperten prüfen lassen"),
+        el("p", {}, "Jemand mit Erfahrung im Thüringer Förderrecht prüft Ihren Entwurf: Passen die Voraussetzungen, fehlt etwas, was erhöht Ihre Chancen? Sie erhalten vorab ein Angebot per E-Mail."));
+      kasten.append(el("div", { class: "experten-raster" }, kopf, el("div", { class: "experten-aktion" }, text)));
+      const aktion = kasten.querySelector(".experten-aktion");
+
+      if (gast) {
+        aktion.append(el("button", { type: "button", class: "haupt", id: "experten-knopf", onclick: async () => {
+          gastDaten.expertenWunsch = true;
+          await speichern({ entwurf: aktueller() });
+          location.hash = "#/anmelden";
+        } }, "Konto anlegen und Prüfung anfragen"),
+        el("p", { class: "hilfe", style: "margin-top:8px" }, "Ihr Entwurf wird dabei in Ihr Konto übernommen."));
+        return kasten;
+      }
+
+      const formZeigen = () => {
+        const nachricht = el("textarea", { id: "ex-nachricht", maxlength: "2000", style: "min-height:90px", placeholder: "Was ist Ihnen besonders wichtig? Gibt es eine Frist?" });
+        const telefon = el("input", { type: "tel", id: "ex-telefon", maxlength: "40", autocomplete: "tel", placeholder: "optional" });
+        const ok = el("input", { type: "checkbox", id: "ex-ok" });
+        const fehler = el("p", { class: "formfehler", role: "alert" });
+        const senden = el("button", { type: "submit", class: "haupt" }, "Prüfung anfragen");
+        const form = el("form", { novalidate: true },
+          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "ex-nachricht" }, "Nachricht (optional)"), nachricht),
+          el("div", { class: "feldgruppe", style: "max-width:300px" }, el("label", { class: "feld", for: "ex-telefon" }, "Telefon für Rückfragen"), telefon),
+          el("div", { class: "feldgruppe" }, el("label", { class: "schalter" }, ok,
+            `Ich bin einverstanden, dass die prüfende Person meinen Antragsentwurf und meine Kontaktdaten (${zustand.sitzung.user.email}) einsehen darf.`)),
+          fehler, el("div", { class: "knoepfe" }, senden));
+        form.addEventListener("submit", async (ev) => {
+          ev.preventDefault();
+          if (!ok.checked) { fehler.textContent = "Bitte bestätigen Sie, dass wir Ihren Entwurf einsehen dürfen."; return; }
+          senden.disabled = true;
+          try {
+            await speichern({ entwurf: aktueller() });
+            await sb.from("expertenanfragen").insert({
+              antrag_id: antrag.id, programm_id: programmId, kontakt_email: zustand.sitzung.user.email,
+              telefon: telefon.value.trim() || null, nachricht: nachricht.value.trim() || null,
+            }).throwOnError();
+            aktion.replaceChildren(text, meldung("Ihre Anfrage ist eingegangen. Wir melden uns per E-Mail mit einem Angebot.", "hinweis"));
+          } catch (fe) { fehler.textContent = fehlertext(fe); senden.disabled = false; }
+        });
+        aktion.replaceChildren(text, form);
+        nachricht.focus();
+      };
+      (async () => {
+        let vorhanden = null;
+        if (antrag) {
+          const { data } = await sb.from("expertenanfragen").select("id,status,erstellt_am").eq("antrag_id", antrag.id).maybeSingle();
+          vorhanden = data;
+        }
+        if (vorhanden) {
+          const st = { neu: "eingegangen", in_bearbeitung: "in Bearbeitung", erledigt: "abgeschlossen" }[vorhanden.status] || vorhanden.status;
+          aktion.append(meldung(`Prüfung angefragt am ${datum(vorhanden.erstellt_am)} – Status: ${st}.`, "hinweis"));
+        } else {
+          aktion.append(el("button", { type: "button", class: "haupt", id: "experten-knopf", onclick: formZeigen }, "Prüfung anfragen"));
+        }
+      })();
+      return kasten;
     };
 
     // Einstieg
@@ -1254,7 +1353,7 @@
     return (daten.ergebnisse || []).map((p) => ({
       id: p.id, titel: p.titel, kurztext: p.kurztext, foerderart: p.foerderart, foerdergeber: p.foerdergeber,
       ebene: p.ebene, link: p.link, fristen: p.fristen, einstufung: p.einstufung, punkte: p.punkte,
-      begruendung: p.begruendung, offene_fragen: p.offene_fragen,
+      begruendung: p.begruendung, offene_fragen: p.offene_fragen, max_euro: p.max_euro || null, frist_datum: p.frist_datum || null,
     }));
   }
   async function empfehlungenSpeichern(projektId, daten) {
@@ -1307,49 +1406,90 @@
   // Seite: Startseite (öffentlich)
   // ------------------------------------------------------------------
   async function seiteLanding(main) {
-    const kopf = hoehenlinienKopf();
-    kopf.classList.add("landing");
-    kopf.append(el("div", { class: "seite breit landing-raster" },
-      el("div", {},
-        el("h1", {}, "Fördermittel für Ihr Vorhaben in Thüringen – gefunden in fünf Minuten."),
-        el("p", { class: "einleitung" }, "Der Kompass kennt die Förderprogramme des Landes, des Bundes, der EU und aller 15 LEADER-Regionen in Thüringen. Sie beantworten ein paar Fragen, die KI prüft jedes Programm für Sie und hilft beim Antrag."),
-        el("div", { class: "knoepfe", style: "margin-top:24px" },
-          el("a", { class: "knopf haupt gross", href: "#/start" }, "Kostenlos starten"),
-          el("a", { class: "knopf neben", href: "#/suche" }, "Direkt suchen")),
-        el("p", { class: "hilfe", style: "margin-top:14px" }, "Ohne Anmeldung ausprobieren. Ein Konto brauchen Sie erst zum Speichern.")),
-      beispielKarte()));
-    main.append(kopf);
+    const B = window.BILDER || {};
+    const bild = (name, klasse) => { const d = el("div", { class: klasse || "bild" }); d.innerHTML = B[name] || ""; return d; };
+    const haken = (art) => {
+      const s = el("span", { class: "tabzeichen " + art, "aria-hidden": "true" }, art === "ja" ? "✓" : art === "teils" ? "◐" : "–");
+      return [s, el("span", { class: "versteckt" }, art === "ja" ? "ja" : art === "teils" ? "teilweise" : "nein")];
+    };
 
-    const schritte = [
-      ["Erzählen Sie von sich", "Wer Sie sind und wo – oder geben Sie einfach Ihre Website an, die KI füllt den Rest aus."],
-      ["Beschreiben Sie Ihr Vorhaben", "In eigenen Worten. Noch keine konkrete Idee? Die KI schlägt förderfähige Projekte vor."],
-      ["Erhalten Sie Empfehlungen", "Jedes passende Programm mit Passung in Prozent, Begründung und offenen Fragen."],
-      ["Bereiten Sie den Antrag vor", "Der Assistent prüft die Voraussetzungen und schreibt einen ersten Entwurf – als Word oder PDF."],
+    // Kopf
+    main.append(el("section", { class: "held" }, el("div", { class: "seite breit held-raster" },
+      el("div", { class: "held-text" },
+        el("h1", {}, "Finden Sie die Förderung, die zu Ihrem Vorhaben passt."),
+        el("p", { class: "einleitung" }, "Für Vereine, Unternehmen, Gründer:innen, Kommunen und Privathaushalte in Thüringen. Drei Fragen – und die KI prüft über 800 Programme für Sie."),
+        el("div", { class: "knoepfe" }, el("a", { class: "knopf haupt gross", href: "#/start" }, "Förderung finden")),
+        el("ul", { class: "held-hinweise" },
+          el("li", {}, "Kostenlos"), el("li", {}, "Ohne Anmeldung"), el("li", {}, "In 90 Sekunden"))),
+      bild("landschaft", "held-bild"))));
+
+    // Fakten
+    main.append(el("div", { class: "faktenband" }, el("ul", { class: "seite breit" },
+      [["800+", "Förderprogramme von Land, Bund und EU"], ["15", "LEADER-Regionen in Thüringen"],
+       ["Jeden Montag", "aktualisiert"], ["0 €", "für Suche und Empfehlungen"]].map(([z, t]) =>
+        el("li", {}, el("strong", {}, z), el("span", {}, t))))));
+
+    const seite = el("div", { class: "seite breit" });
+    main.append(seite);
+
+    // So funktioniert's
+    seite.append(el("section", { class: "abschnitt" },
+      el("h2", { class: "mitte" }, "So einfach geht's"),
+      el("ol", { class: "drei-schritte" },
+        [["profil", "Sagen Sie uns, wer Sie sind", "Antragsteller, Ort, Vorhaben – oder die Adresse Ihrer Website. Keine Idee? Die KI schlägt förderfähige Projekte vor."],
+         ["empfehlungen", "Sehen Sie Ihre Treffer", "Passende Programme nach Passung sortiert, mit Begründung, Fristen und Ihrem Förderpotenzial in Euro."],
+         ["antrag", "Bereiten Sie den Antrag vor", "Der Assistent prüft die Voraussetzungen und schreibt einen Entwurf. Auf Wunsch prüft ein Förderexperte."]]
+          .map(([b, t, x]) => el("li", {}, bild(b, "schritt-bild"), el("h3", {}, t), el("p", {}, x)))),
+      el("div", { class: "mitte" }, el("a", { class: "knopf haupt", href: "#/start" }, "Jetzt starten"))));
+
+    // Vergleich
+    const zeilen = [
+      ["Programme von Land, Bund und EU", "ja", "ja", "teils"],
+      ["LEADER-Regionen und Regionalbudgets", "ja", "teils", "teils"],
+      ["Passung in Prozent mit Begründung", "ja", "nein", "nein"],
+      ["Förderpotenzial in Euro", "ja", "nein", "nein"],
+      ["KI-Projektideen für Ihre Organisation", "ja", "nein", "nein"],
+      ["Antragsentwurf als Word / PDF", "ja", "nein", "nein"],
+      ["Erinnerung an neue Programme und Fristen", "ja", "nein", "nein"],
+      ["Prüfung durch Förderexperten", "ja", "nein", "teils"],
     ];
-    const leistungen = [
-      ["Regional statt nur bundesweit", "Neben Land, Bund und EU auch die Aufrufe der LEADER-Regionen und Regionalbudgets – das, was in Thüringen vor Ort wirklich zählt."],
-      ["Fördermittelwecker", "Speichern Sie Ihr Projekt, und wir melden uns jeden Montag, wenn ein neues passendes Programm dazukommt."],
-      ["Merkliste und Vergleich", "Programme mit Status und Notizen verwalten und nebeneinander vergleichen."],
-      ["Für alle, die Förderung suchen", "Privathaushalte, Gründer:innen, Unternehmen, Vereine, Kommunen, Bildung und Forschung."],
+    seite.append(el("section", { class: "abschnitt" },
+      el("h2", { class: "mitte" }, "Warum der Fördermittelkompass?"),
+      el("div", { class: "tabellenrahmen vergleich-landing" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", { scope: "col" }, el("span", { class: "versteckt" }, "Funktion")),
+          el("th", { scope: "col", class: "wir" }, "Fördermittel­kompass"), el("th", { scope: "col" }, "Förder­datenbanken"), el("th", { scope: "col" }, "Selbst suchen"))),
+        el("tbody", {}, zeilen.map(([t, a, b, c]) => el("tr", {}, el("th", { scope: "row" }, t),
+          el("td", { class: "wir" }, haken(a)), el("td", {}, haken(b)), el("td", {}, haken(c)))))))));
+
+    // Expertenprüfung
+    seite.append(el("section", { class: "abschnitt experten" },
+      bild("experte", "experten-bild"),
+      el("div", {},
+        el("h2", {}, "Ihr Antrag, geprüft von Förderexperten"),
+        el("p", {}, "Die KI schreibt den ersten Entwurf. Wenn Sie auf Nummer sicher gehen möchten, schaut sich jemand mit Erfahrung im Thüringer Förderrecht Ihren Antrag an: Stimmen die Voraussetzungen? Fehlt etwas? Was erhöht die Chancen?"),
+        el("ul", { class: "punkte-liste" },
+          el("li", {}, "Anfrage direkt aus dem Antragsassistenten"),
+          el("li", {}, "Rückmeldung persönlich per E-Mail"),
+          el("li", {}, "Ihre Unterlagen sieht nur die prüfende Person")),
+        el("a", { class: "knopf haupt", href: "#/start" }, "Antrag vorbereiten"))));
+
+    // Häufige Fragen
+    const fragen = [
+      ["Was kostet der Fördermittelkompass?", "Suche, Empfehlungen, Projektideen und Antragsentwurf sind kostenlos. Für die persönliche Prüfung durch Förderexperten erhalten Sie vorab ein Angebot."],
+      ["Woher stammen die Förderprogramme?", "Aus der Förderdatenbank des Bundes (aufbereitet von CorrelAid e.V.) und direkt von den Seiten der Thüringer LEADER-Regionen. Alles wird jeden Montag automatisch aktualisiert."],
+      ["Wie zuverlässig sind die Einschätzungen?", "Die KI liest die Programmtexte und vergleicht sie mit Ihren Angaben. Das ist eine gute erste Orientierung, aber keine verbindliche Auskunft. Maßgeblich ist immer die Förderrichtlinie – klären Sie Ihre Antragsberechtigung vor dem Antrag mit dem Fördergeber."],
+      ["Muss ich mich anmelden?", "Nein. Suche, Empfehlungen und Antragsentwurf funktionieren ohne Konto. Mit einem kostenlosen Konto speichern Sie Projekte, Merkliste und Entwürfe und bekommen Benachrichtigungen über neue Programme."],
+      ["Was passiert mit meinen Angaben?", "Ihre Beschreibung wird für die Suche an unseren Datenbankdienst und zur Auswertung an eine KI übermittelt. Gespeichert wird nur, was Sie in Ihrem Konto speichern – und Sie können alles jederzeit löschen."],
     ];
-    main.append(el("div", { class: "seite breit" },
-      el("section", { class: "abschnitt" },
-        el("h2", {}, "So funktioniert's"),
-        el("ol", { class: "ablauf" }, schritte.map(([t, x]) => el("li", {}, el("h3", {}, t), el("p", {}, x))))),
-      el("section", { class: "abschnitt" },
-        el("h2", {}, "Was der Kompass für Sie tut"),
-        el("div", { class: "leistungen" }, leistungen.map(([t, x]) => el("div", {}, el("h3", {}, t), el("p", {}, x))))),
-      el("section", { class: "abschnitt aufruf" },
-        el("h2", {}, "Bereit?"),
-        el("p", {}, "Fünf Minuten, und Sie wissen, welche Förderung für Ihr Vorhaben infrage kommt."),
-        el("a", { class: "knopf haupt gross", href: "#/start" }, "Kostenlos starten"))));
-  }
-  function beispielKarte() {
-    return el("div", { class: "beispiel", "aria-hidden": "true" },
-      el("p", { class: "beispiel-titel" }, "Beispiel: Heimatverein im Landkreis Gotha"),
-      [["LEADER-Förderung Gotha-Ilm-Kreis-Erfurt", 92, "passt"], ["Regionalbudget für Kleinprojekte", 85, "passt"],
-       ["Solidarisches Zusammenleben der Generationen", 64, "passt_teilweise"]].map(([t, pz, e]) =>
-        el("div", { class: "beispiel-zeile " + e }, el("span", {}, t), passungAnzeige(pz))));
+    seite.append(el("section", { class: "abschnitt faq" },
+      el("h2", { class: "mitte" }, "Häufige Fragen"),
+      el("div", { class: "faq-liste" }, fragen.map(([f, a]) => el("details", {}, el("summary", {}, f), el("p", {}, a))))));
+
+    // Schluss
+    seite.append(el("section", { class: "abschluss" },
+      el("h2", {}, "Welche Förderung steht Ihnen zu?"),
+      el("p", {}, "Finden Sie es in 90 Sekunden heraus – kostenlos und ohne Anmeldung."),
+      el("a", { class: "knopf haupt gross", href: "#/start" }, "Förderung finden")));
   }
 
   // ------------------------------------------------------------------
@@ -1366,32 +1506,31 @@
       s.organisation = { name: o.name || "", zielgruppe: o.zielgruppe || "", rechtsform: o.rechtsform || "", landkreis: o.landkreis || "",
         taetigkeitsfeld: o.taetigkeitsfeld || "", beschreibung: o.beschreibung || "", website: o.website || "" };
     }
-    const neu = r.params.get("neu");
-    if (neu) { s.vorhaben = {}; s.ideen = null; s.ergebnis = null; }
+    if (r.params.get("neu")) { s.vorhaben = {}; s.ideen = null; s.ergebnis = null; s.gespeichertesProjekt = null; }
+    // ältere Fassung hatte 4 Schritte
+    if (s.schritt === 4) s.schritt = 3;
     let start = Number(r.params.get("schritt")) || s.schritt || 1;
+    if (start > 3) start = 3;
     if (start > 1 && !s.organisation.zielgruppe) start = 1;
-    if (start > 3 && !(s.vorhaben.beschreibung || "").trim()) start = 3;
+    if (start > 2 && !((s.vorhaben.beschreibung || "").trim() && s.organisation.landkreis)) start = 2;
     const merken = () => einstiegSpeichern(s);
 
-    const TITEL = ["Wer sind Sie?", "Über Sie", "Ihr Vorhaben", "Ihre Empfehlungen"];
+    const TITEL = ["Wer sind Sie?", "Ihr Vorhaben", "Ihre Empfehlungen"];
     const leiste = el("ol", { class: "schritte", "aria-label": "Fortschritt" });
     const bereich = el("div", { class: "einstieg" });
-    seite.append(el("div", { class: "seitenkopf" }, el("h1", { class: "klein" }, "Passende Förderung finden"),
-      el("p", {}, angemeldet() ? "In vier Schritten zu Ihren Empfehlungen." : "In vier Schritten zu Ihren persönlichen Empfehlungen – ohne Anmeldung.")),
+    seite.append(el("div", { class: "seitenkopf" }, el("h1", { class: "klein" }, "Förderung finden"),
+      el("p", {}, angemeldet() ? "Drei Schritte zu Ihren Empfehlungen." : "Drei Schritte zu Ihren persönlichen Empfehlungen – kostenlos und ohne Anmeldung.")),
       leiste, bereich);
 
     const gehe = (n) => {
       s.schritt = n; merken();
       leiste.replaceChildren(...TITEL.map((t, i) => el("li", { "aria-current": i + 1 === n ? "step" : null },
         i + 1 < n ? el("button", { type: "button", class: "schritt-knopf", onclick: () => gehe(i + 1) }, `${i + 1}. ${t}`) : `${i + 1}. ${t}`)));
-      [null, schritt1, schritt2, schritt3, schritt4][n]();
+      [null, schritt1, schritt2, schritt3][n]();
       window.scrollTo(0, 0);
     };
-    const navi = (zurueck, weiterText, weiter) => el("div", { class: "knoepfe einstieg-navi" },
-      zurueck ? el("button", { type: "button", class: "neben", onclick: zurueck }, "Zurück") : null,
-      weiter ? el("button", { type: "submit", class: "haupt" }, weiterText) : null);
 
-    // Schritt 1: Wer sind Sie?
+    // ---------- Schritt 1: Wer sind Sie? ----------
     const schritt1 = () => {
       bereich.replaceChildren(el("div", { class: "kacheln", role: "list" },
         zustand.zielgruppen.map(([slug, name]) => el("button", {
@@ -1404,99 +1543,101 @@
         }, el("span", { class: "kachel-titel" }, name), el("span", { class: "kachel-text" }, GRUPPEN_TEXT[slug] || "")))));
     };
 
-    // Schritt 2: Über Sie (mit Website-Auslesen)
+    // ---------- Schritt 2: Ort, Vorhaben, optionale Zusatzangaben ----------
     const schritt2 = () => {
-      const og = s.organisation;
+      const og = s.organisation, v = s.vorhaben;
       const auswahl = (id, werte, wert, leer) => {
         const sel = el("select", { id }, el("option", { value: "" }, leer),
-          werte.map((w) => { const [v, t] = Array.isArray(w) ? w : [w, w]; return el("option", { value: v }, t); }));
+          werte.map((w) => { const [val, t] = Array.isArray(w) ? w : [w, w]; return el("option", { value: val }, t); }));
         sel.value = wert || ""; return sel;
       };
-      const f = {
-        name: el("input", { type: "text", id: "e-name", maxlength: "200", value: og.name || "", placeholder: og.zielgruppe === "privatpersonen" ? "optional" : "z. B. Heimatverein Musterdorf e. V." }),
-        landkreis: auswahl("e-landkreis", LANDKREISE, og.landkreis, "Bitte wählen"),
+      const landkreis = auswahl("e-landkreis", LANDKREISE, og.landkreis, "Bitte wählen");
+      landkreis.addEventListener("change", () => { og.landkreis = landkreis.value; merken(); });
+
+      // Zusatzangaben (aufklappbar)
+      const z = {
+        url: el("input", { type: "url", id: "e-url", value: og.website || "", placeholder: "www.ihre-website.de", inputmode: "url" }),
+        name: el("input", { type: "text", id: "e-name", maxlength: "200", value: og.name || "" }),
         rechtsform: auswahl("e-rechtsform", RECHTSFORMEN, og.rechtsform, "Bitte wählen"),
-        feld: el("input", { type: "text", id: "e-feld", maxlength: "300", value: og.taetigkeitsfeld || "", placeholder: "z. B. Jugendarbeit, Bäckerei, Maschinenbau" }),
-        beschreibung: el("textarea", { id: "e-beschreibung", maxlength: "2000", placeholder: "Was machen Sie, für wen, seit wann? Zwei, drei Sätze genügen." }, og.beschreibung || ""),
+        feld: el("input", { type: "text", id: "e-feld", maxlength: "300", value: og.taetigkeitsfeld || "", placeholder: "z. B. Jugendarbeit, Bäckerei" }),
+        beschreibung: el("textarea", { id: "e-beschreibung", maxlength: "2000", style: "min-height:90px", placeholder: "Was machen Sie, für wen, seit wann?" }, og.beschreibung || ""),
       };
-      const url = el("input", { type: "url", id: "e-url", value: og.website || "", placeholder: "www.ihre-website.de", inputmode: "url" });
+      const zusatzLesen = () => {
+        Object.assign(og, { name: z.name.value.trim(), rechtsform: z.rechtsform.value, taetigkeitsfeld: z.feld.value.trim(),
+          beschreibung: z.beschreibung.value.trim(), landkreis: landkreis.value });
+        merken();
+      };
+      Object.values(z).forEach((f) => f.addEventListener("change", zusatzLesen));
       const urlKnopf = el("button", { type: "button", class: "neben" }, "Website auslesen");
       const urlRueck = el("div", { "aria-live": "polite" });
       urlKnopf.addEventListener("click", async () => {
-        if (!url.value.trim()) { urlRueck.replaceChildren(el("p", { class: "formfehler" }, "Bitte geben Sie eine Website-Adresse ein.")); return; }
+        if (!z.url.value.trim()) { urlRueck.replaceChildren(el("p", { class: "formfehler" }, "Bitte geben Sie eine Website-Adresse ein.")); return; }
         urlKnopf.disabled = true;
         urlRueck.replaceChildren(ladeanzeige("Die KI liest Ihre Website …"));
         try {
-          const { profil } = await funktion("ideen", { aktion: "website", url: url.value.trim() });
-          if (profil.name) f.name.value = profil.name;
-          if (profil.landkreis) f.landkreis.value = profil.landkreis;
-          if (profil.rechtsform) f.rechtsform.value = profil.rechtsform;
-          if (profil.taetigkeitsfeld) f.feld.value = profil.taetigkeitsfeld;
-          if (profil.beschreibung) f.beschreibung.value = profil.beschreibung;
-          if (profil.zielgruppe && profil.zielgruppe !== og.zielgruppe) og.zielgruppe_vorschlag = profil.zielgruppe;
-          og.website = profil.website || url.value.trim();
-          urlRueck.replaceChildren(el("p", { class: "erfolg" }, "Übernommen – bitte kurz prüfen und bei Bedarf anpassen."));
+          const { profil } = await funktion("ideen", { aktion: "website", url: z.url.value.trim() });
+          if (profil.name) z.name.value = profil.name;
+          if (profil.rechtsform) z.rechtsform.value = profil.rechtsform;
+          if (profil.taetigkeitsfeld) z.feld.value = profil.taetigkeitsfeld;
+          if (profil.beschreibung) z.beschreibung.value = profil.beschreibung;
+          if (profil.landkreis && !landkreis.value) landkreis.value = profil.landkreis;
+          og.website = profil.website || z.url.value.trim();
+          zusatzLesen();
+          urlRueck.replaceChildren(el("p", { class: "erfolg" }, "Übernommen – bitte kurz prüfen."));
         } catch (fe) {
           urlRueck.replaceChildren(...(fe.code === "limit_gast" ? assistentFehler(fe) : [el("p", { class: "formfehler" }, fehlertext(fe))]));
         }
         urlKnopf.disabled = false;
       });
-      const zeile = (id, text, feld, hilfe) => el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: id }, text), hilfe ? el("p", { class: "hilfe" }, hilfe) : null, feld);
-      const fehler = el("p", { class: "formfehler", role: "alert" });
-      const form = el("form", { class: "flaeche", novalidate: true },
-        el("div", { class: "website-kasten" },
-          el("label", { class: "titel", for: "e-url" }, "Haben Sie eine Website?"),
-          el("p", { class: "hilfe" }, "Dann füllt die KI die Angaben unten für Sie aus."),
-          el("div", { class: "zeile-mit-knopf" }, url, urlKnopf), urlRueck),
-        el("div", { class: "raster" },
-          zeile("e-name", "Name", f.name),
-          zeile("e-landkreis", "Landkreis / Stadt", f.landkreis),
-          zeile("e-rechtsform", "Rechtsform", f.rechtsform),
-          zeile("e-feld", "Tätigkeitsfeld", f.feld)),
-        zeile("e-beschreibung", "Kurz über Sie", f.beschreibung, "Hilft der KI, passende Programme und Ideen zu finden."),
-        fehler,
-        navi(() => { leseFelder(); gehe(1); }, "Weiter", true));
-      const leseFelder = () => {
-        Object.assign(og, { name: f.name.value.trim(), landkreis: f.landkreis.value, rechtsform: f.rechtsform.value,
-          taetigkeitsfeld: f.feld.value.trim(), beschreibung: f.beschreibung.value.trim() });
-        merken();
-      };
-      form.addEventListener("submit", (ev) => {
-        ev.preventDefault(); leseFelder();
-        if (!og.landkreis) { fehler.textContent = "Bitte wählen Sie Ihren Landkreis oder Ihre Stadt."; f.landkreis.focus(); return; }
-        gehe(3);
-      });
-      bereich.replaceChildren(form);
-    };
+      const zeile = (id, text, feld) => el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: id }, text), feld);
+      const ausgefuellt = [og.name, og.rechtsform && og.rechtsform !== "Privatperson", og.beschreibung, og.website].filter(Boolean).length;
+      const zusatz = el("details", { class: "zusatz", open: ausgefuellt ? true : null },
+        el("summary", {}, "Mehr über Sie angeben ", el("span", { class: "hilfe-inline" }, "(optional – macht die Ergebnisse genauer)")),
+        el("div", { class: "zusatz-inhalt" },
+          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "e-url" }, "Website – die KI füllt den Rest aus"),
+            el("div", { class: "zeile-mit-knopf" }, z.url, urlKnopf), urlRueck),
+          el("div", { class: "raster" }, zeile("e-name", "Name", z.name), zeile("e-rechtsform", "Rechtsform", z.rechtsform)),
+          zeile("e-feld", "Tätigkeitsfeld", z.feld),
+          zeile("e-beschreibung", "Kurz über Sie", z.beschreibung)));
 
-    // Schritt 3: Vorhaben – eigene Idee oder KI-Vorschläge
-    const schritt3 = () => {
-      const v = s.vorhaben;
       const modus = s.modus || "idee";
-      const wahl = el("div", { class: "wahl", role: "radiogroup", "aria-label": "Wie möchten Sie weitermachen?" },
+      const wahl = el("div", { class: "wahl", role: "radiogroup", "aria-label": "Haben Sie schon eine Idee?" },
         [["idee", "Ich habe schon eine Idee", "Beschreiben Sie Ihr Vorhaben in eigenen Worten."],
          ["vorschlag", "Schlagen Sie mir Ideen vor", "Die KI entwickelt förderfähige Projekte passend zu Ihnen."]].map(([wert, titel, text]) =>
           el("button", { type: "button", role: "radio", "aria-checked": modus === wert ? "true" : "false", class: "wahl-karte",
-            onclick: () => { s.modus = wert; merken(); schritt3(); } },
+            onclick: () => { zusatzLesen(); s.modus = wert; merken(); schritt2(); } },
             el("span", { class: "kachel-titel" }, titel), el("span", { class: "kachel-text" }, text))));
+
+      const fehler = el("p", { class: "formfehler", role: "alert" });
+      const ortPruefen = () => {
+        if (!landkreis.value) { fehler.textContent = "Bitte wählen Sie Ihren Landkreis oder Ihre Stadt."; landkreis.focus(); return false; }
+        return true;
+      };
+      const kopf = el("div", { class: "flaeche" },
+        el("div", { class: "feldgruppe", style: "max-width:380px" }, el("label", { class: "titel", for: "e-landkreis" }, "Wo in Thüringen?"), landkreis),
+        el("p", { class: "titel-frage" }, "Haben Sie schon eine Idee?"), wahl);
       const inhalt = el("div");
-      bereich.replaceChildren(wahl, inhalt);
+      bereich.replaceChildren(kopf, inhalt);
 
       if (modus === "idee") {
         const titel = el("input", { type: "text", id: "v-titel", maxlength: "200", value: v.titel || "", placeholder: "z. B. Spielplatz am Dorfteich" });
         const text = el("textarea", { id: "v-text", maxlength: "4000", placeholder: "Was soll entstehen? Wer profitiert? Bis wann?" }, v.beschreibung || "");
         const kosten = el("input", { type: "number", id: "v-kosten", min: "0", step: "100", value: v.kosten_euro || "" });
-        const fehler = el("p", { class: "formfehler", role: "alert" });
         const form = el("form", { class: "flaeche", novalidate: true },
-          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-titel" }, "Titel (optional)"), titel),
-          el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-text" }, "Was haben Sie vor?"), text),
-          el("div", { class: "feldgruppe", style: "max-width:260px" }, el("label", { class: "feld", for: "v-kosten" }, "Geschätzte Kosten in Euro (optional)"), kosten),
-          fehler, navi(() => gehe(2), "Empfehlungen anzeigen", true));
+          el("div", { class: "feldgruppe" }, el("label", { class: "titel", for: "v-text" }, "Was haben Sie vor?"), text),
+          el("div", { class: "raster" },
+            el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-titel" }, "Titel (optional)"), titel),
+            el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-kosten" }, "Geschätzte Kosten in Euro (optional)"), kosten)),
+          zusatz, fehler,
+          el("div", { class: "knoepfe einstieg-navi" },
+            el("button", { type: "button", class: "neben", onclick: () => gehe(1) }, "Zurück"),
+            el("button", { type: "submit", class: "haupt" }, "Empfehlungen anzeigen")));
         form.addEventListener("submit", (ev) => {
-          ev.preventDefault();
+          ev.preventDefault(); fehler.textContent = ""; zusatzLesen();
+          if (!ortPruefen()) return;
           if (text.value.trim().length < 15) { fehler.textContent = "Bitte beschreiben Sie Ihr Vorhaben in ein, zwei Sätzen."; text.focus(); return; }
           s.vorhaben = { titel: titel.value.trim(), beschreibung: text.value.trim(), kosten_euro: kosten.value ? Number(kosten.value) : null };
-          s.ergebnis = null; merken(); gehe(4);
+          s.ergebnis = null; merken(); gehe(3);
         });
         inhalt.append(form);
         return;
@@ -1508,50 +1649,50 @@
       const ideenBox = el("div", { "aria-live": "polite" });
       const zeigeIdeen = () => {
         ideenBox.replaceChildren(...(s.ideen || []).map((i) => el("article", { class: "idee" },
-          el("h3", {}, i.titel),
-          el("p", {}, i.beschreibung),
+          el("h3", {}, i.titel), el("p", {}, i.beschreibung),
           i.nutzen ? el("p", { class: "kurz" }, i.nutzen) : null,
           (i.themen || []).length ? el("ul", { class: "arten" }, i.themen.map((t) => el("li", {}, t))) : null,
           (i.programme || []).length ? el("p", { class: "idee-programme" }, el("strong", {}, "Zum Beispiel: "),
             i.programme.flatMap((p, n) => [n ? " · " : "", el("a", { href: "#/programm/" + p.id }, p.titel)])) : null,
           el("button", { type: "button", class: "haupt", onclick: () => {
+            if (!ortPruefen()) return;
             s.vorhaben = { titel: i.titel, beschreibung: i.beschreibung, kosten_euro: null };
-            s.modus = "idee"; s.ergebnis = null; merken(); gehe(4);
+            s.modus = "idee"; s.ergebnis = null; merken(); gehe(3);
           } }, "Mit dieser Idee weiter"))));
       };
       knopf.addEventListener("click", async () => {
+        fehler.textContent = ""; zusatzLesen();
+        if (!ortPruefen()) return;
         s.wunsch = wunsch.value.trim(); merken();
         knopf.disabled = true;
         ideenBox.replaceChildren(ladeanzeige("Die KI entwickelt Projektideen für Sie. Das dauert etwa 15 Sekunden …"));
         try {
-          const og = s.organisation;
           const { ideen } = await funktion("ideen", { aktion: "ideen", wunsch: s.wunsch,
             organisation: { ...og, zielgruppe_name: gruppenName(og.zielgruppe) } });
           s.ideen = ideen; merken(); zeigeIdeen();
           knopf.textContent = "Neue Ideen entwickeln";
-        } catch (fe) {
-          ideenBox.replaceChildren(...assistentFehler(fe, () => knopf.click()));
-        }
+        } catch (fe) { ideenBox.replaceChildren(...assistentFehler(fe, () => knopf.click())); }
         knopf.disabled = false;
       });
       inhalt.append(el("div", { class: "flaeche" },
-        el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: "v-wunsch" }, "Worum soll es gehen?"), wunsch),
-        el("div", { class: "knoepfe" }, el("button", { type: "button", class: "neben", onclick: () => gehe(2) }, "Zurück"), knopf)),
+        el("div", { class: "feldgruppe" }, el("label", { class: "titel", for: "v-wunsch" }, "Worum soll es gehen?"), wunsch),
+        zusatz, fehler,
+        el("div", { class: "knoepfe" }, el("button", { type: "button", class: "neben", onclick: () => gehe(1) }, "Zurück"), knopf)),
         ideenBox);
       if (s.ideen) zeigeIdeen();
     };
 
-    // Schritt 4: Empfehlungen
-    const schritt4 = async () => {
+    // ---------- Schritt 3: Empfehlungen ----------
+    const schritt3 = async () => {
       const og = s.organisation, v = s.vorhaben;
       const zusammenfassung = el("div", { class: "flaeche zusammenfassung-kasten" },
         el("p", { class: "meta" }, [gruppenName(og.zielgruppe), og.name, og.landkreis].filter(Boolean).join(" · ")),
         el("h2", {}, v.titel || "Ihr Vorhaben"),
         el("p", {}, v.beschreibung),
-        el("button", { type: "button", class: "leise", onclick: () => gehe(3) }, "Vorhaben ändern"));
+        el("button", { type: "button", class: "leise", onclick: () => gehe(2) }, "Vorhaben ändern"));
       const box = el("div", { id: "ergebnisse", "aria-live": "polite" });
       const sichern = el("div");
-      bereich.replaceChildren(zusammenfassung, sichern, box);
+      bereich.replaceChildren(zusammenfassung, box, sichern);
 
       const sichernZeigen = (daten) => {
         if (!daten || !(daten.ergebnisse || []).length) { sichern.replaceChildren(); return; }
@@ -1564,17 +1705,15 @@
           const k = el("button", { type: "button", class: "haupt" }, "Als Projekt speichern");
           k.addEventListener("click", async () => {
             k.disabled = true;
-            try {
-              const id = await einstiegAlsProjekt(s, daten);
-              location.hash = "#/projekt/" + id;
-            } catch (fe) { k.disabled = false; alertFrei(k, fehlertext(fe)); }
+            try { location.hash = "#/projekt/" + await einstiegAlsProjekt(s, daten); }
+            catch (fe) { k.disabled = false; alertFrei(k, fehlertext(fe)); }
           });
           sichern.replaceChildren(el("div", { class: "sichern-kasten" },
-            el("div", {}, el("strong", {}, "Projekt speichern"), el("p", {}, "Empfehlungen behalten und jeden Montag über neue passende Programme informiert werden.")), k));
+            el("div", {}, el("strong", {}, "Projekt speichern"), el("p", {}, "Empfehlungen behalten und jeden Montag über neue Programme und Fristen informiert werden.")), k));
         } else {
           sichern.replaceChildren(el("div", { class: "sichern-kasten" },
             el("div", {}, el("strong", {}, "Ergebnisse sichern – kostenlos"),
-              el("p", {}, "Mit einem Konto speichern wir Ihr Profil, dieses Projekt und die Empfehlungen. Der Fördermittelwecker meldet sich, wenn neue passende Programme dazukommen.")),
+              el("p", {}, "Mit einem Konto speichern wir Ihr Profil, dieses Projekt und die Empfehlungen. Wir melden uns, wenn neue passende Programme dazukommen oder eine Frist näher rückt.")),
             el("a", { class: "knopf haupt", href: "#/anmelden" }, "Kostenlos speichern")));
         }
       };
@@ -1656,9 +1795,20 @@
       const pr = antragProgNach.get(a.programm_id);
       schritte.push(["Antrag fortsetzen", pr ? pr.titel : "Begonnener Antrag", `#/assistent/${a.programm_id}?antrag=${a.id}`, "Fortsetzen"]);
     }
-    const mitFrist = zustand.merkliste.filter((m) => !["abgelehnt", "bewilligt", "beantragt"].includes(m.status))
-      .map((m) => progNach.get(m.programm_id)).filter((p) => p && p.fristen).slice(0, 3);
-    for (const p of mitFrist) schritte.push([`Frist beachten: ${p.titel}`, kuerzen(p.fristen, 140), "#/programm/" + p.id, "Ansehen"]);
+    // Fristen: aus Merkliste (Datum) und gespeicherten Empfehlungen
+    const heute = new Date().toISOString().slice(0, 10);
+    const fristen = [];
+    for (const m of zustand.merkliste.filter((m) => m.frist_datum && m.frist_datum >= heute && !["abgelehnt", "bewilligt", "beantragt"].includes(m.status))) {
+      const pr = progNach.get(m.programm_id);
+      fristen.push({ id: m.programm_id, titel: pr ? pr.titel : "Programm", frist_datum: m.frist_datum, quelle: "Merkliste" });
+    }
+    for (const p of projekte || []) for (const e of (p.empfehlungen || []).filter((e) => e.frist_datum && e.frist_datum >= heute && e.einstufung !== "passt_nicht")) {
+      if (!fristen.some((f) => f.id === e.id)) fristen.push({ id: e.id, titel: e.titel, frist_datum: e.frist_datum, quelle: p.titel });
+    }
+    fristen.sort((a, b) => a.frist_datum.localeCompare(b.frist_datum));
+    for (const f of fristen.filter((f) => (new Date(f.frist_datum) - new Date()) / 86400000 <= 30).slice(0, 3)) {
+      schritte.push([`Frist bald: ${f.titel}`, `Einreichen bis ${fristText(f)}`, "#/programm/" + f.id, "Ansehen"]);
+    }
 
     const gruss = o.name ? `Willkommen zurück, ${o.name}` : "Willkommen in Ihrem Arbeitsbereich";
     seite.append(el("div", { class: "seitenkopf" }, el("h1", { class: "klein" }, gruss),
@@ -1690,6 +1840,7 @@
             p.empfehlungen_am ? `geprüft am ${datum(p.empfehlungen_am)}` : "noch nicht geprüft"].join(" · ")),
           e.length ? el("p", { class: "zahlen" }, el("span", { class: "punkt passt" }), ` ${gut} passen gut  `,
             el("span", { class: "punkt passt_teilweise" }), ` ${teils} möglicherweise`) : null,
+          potenzial(e).summe ? el("p", { class: "karten-potenzial" }, "Förderpotenzial bis zu ", el("strong", {}, euro(potenzial(e).summe))) : null,
           top.length ? el("ul", { class: "top-liste" }, top.map((x) => el("li", {},
             el("a", { href: "#/programm/" + x.id }, x.titel), passungAnzeige(x.punkte)))) :
             el("p", { class: "kurz" }, kuerzen(p.beschreibung, 160)),
@@ -1697,6 +1848,17 @@
       })));
     }
     seite.append(projektBereich);
+    if (fristen.length) {
+      seite.append(el("section", { class: "flaeche" }, el("h2", {}, "Anstehende Fristen"),
+        el("ul", { class: "fristliste" }, fristen.slice(0, 8).map((f) => {
+          const tage = Math.round((new Date(f.frist_datum + "T12:00:00") - new Date()) / 86400000);
+          return el("li", { class: tage <= 14 ? "dringend" : "" },
+            el("span", { class: "frist-tag" }, datum(f.frist_datum)),
+            el("a", { href: "#/programm/" + f.id }, f.titel),
+            el("span", { class: "meta" }, tage <= 0 ? "heute" : tage === 1 ? "morgen" : `in ${tage} Tagen`));
+        })),
+        el("p", { class: "hilfe", style: "margin:10px 0 0" }, "Termine liest die KI aus den Programmtexten. Bitte beim Fördergeber prüfen.")));
+    }
 
     // Merkliste und Anträge
     const zaehl = (st) => zustand.merkliste.filter((m) => m.status === st).length;
@@ -1717,6 +1879,59 @@
             }))
           : el("p", { class: "kurz" }, "Öffnen Sie eine Empfehlung und klicken Sie auf „Antrag vorbereiten“."),
         el("a", { class: "knopf neben", href: "#/antraege" }, "Alle Anträge"))));
+  }
+
+  // ------------------------------------------------------------------
+  // Seite: Expertenanfragen (nur Betreiber)
+  // ------------------------------------------------------------------
+  async function seiteBetreiber(main) {
+    const seite = el("div", { class: "seite breit" });
+    main.append(seite);
+    if (!zustand.betreiber) { seite.append(seitenkopf("Kein Zugriff"), meldung("Diese Seite ist nur für die Betreiber des Kompasses.")); return; }
+    const { data: anfragen, error } = await sb.from("expertenanfragen").select("*").order("erstellt_am", { ascending: false });
+    if (error) throw error;
+    const neu = anfragen.filter((a) => a.status === "neu").length;
+    seite.append(seitenkopf("Expertenanfragen", `${anfragen.length} ${anfragen.length === 1 ? "Anfrage" : "Anfragen"}, davon ${neu} neu.`));
+    if (!anfragen.length) { seite.append(meldung("Noch keine Anfragen.")); return; }
+    const antragIds = anfragen.map((a) => a.antrag_id).filter(Boolean);
+    const { data: antraege } = antragIds.length ? await sb.from("antraege").select("id,entwurf,pruefung,antworten").in("id", antragIds) : { data: [] };
+    const antragNach = new Map((antraege || []).map((a) => [a.id, a]));
+    const progIds = [...new Set(anfragen.map((a) => a.programm_id).filter(Boolean))];
+    const { data: progs } = progIds.length ? await sb.rpc("programm_details", { ids: progIds }) : { data: [] };
+    const progNach = new Map((progs || []).map((p) => [p.id, p]));
+    for (const a of anfragen) {
+      const pr = progNach.get(a.programm_id) || { titel: "Programm" };
+      const an = antragNach.get(a.antrag_id);
+      const status = el("select", { "aria-label": "Status" },
+        [["neu", "Neu"], ["in_bearbeitung", "In Bearbeitung"], ["erledigt", "Erledigt"]].map(([v, t]) => el("option", { value: v }, t)));
+      status.value = a.status;
+      const notiz = el("textarea", { "aria-label": "Interne Notiz", placeholder: "Interne Notiz (nur für Betreiber sichtbar)", style: "min-height:70px" }, a.notiz_intern || "");
+      const ok = el("span", { class: "erfolg", "aria-live": "polite" });
+      const sichern = async (felder) => {
+        try { await sb.from("expertenanfragen").update(felder).eq("id", a.id).throwOnError(); ok.textContent = "Gespeichert"; setTimeout(() => { ok.textContent = ""; }, 2000); }
+        catch (f) { ok.className = "formfehler"; ok.textContent = fehlertext(f); }
+      };
+      status.addEventListener("change", () => sichern({ status: status.value }));
+      notiz.addEventListener("change", () => sichern({ notiz_intern: notiz.value.trim() || null }));
+      const entwurfBox = el("div", { class: "entwurf-ansicht", hidden: true });
+      if (an && an.entwurf) {
+        entwurfBox.append(el("h3", {}, an.entwurf.titel || "Entwurf"),
+          ...(an.entwurf.abschnitte || []).flatMap((x) => [el("h4", {}, x.ueberschrift), el("p", { style: "white-space:pre-line" }, x.text)]));
+      } else entwurfBox.append(el("p", { class: "kurz" }, "Noch kein Entwurf vorhanden."));
+      seite.append(el("article", { class: "eintrag anfrage " + a.status },
+        el("div", { class: "kopfzeile" }, el("h3", {}, (an && an.entwurf && an.entwurf.titel) || pr.titel),
+          el("span", { class: "meta" }, `eingegangen ${datum(a.erstellt_am)}`)),
+        el("p", { class: "meta" }, "Programm: ", el("a", { href: "#/programm/" + a.programm_id }, pr.titel)),
+        el("p", {}, el("a", { href: `mailto:${a.kontakt_email}?subject=${encodeURIComponent("Ihre Expertenprüfung: " + pr.titel)}` }, a.kontakt_email),
+          a.telefon ? ` · Tel. ${a.telefon}` : ""),
+        a.nachricht ? el("p", { class: "offen" }, el("strong", {}, "Nachricht: "), a.nachricht) : null,
+        el("div", { class: "merkfelder" }, status, notiz),
+        el("div", { class: "kartenfuss" },
+          el("button", { type: "button", class: "neben", onclick: (ev) => { entwurfBox.hidden = !entwurfBox.hidden; ev.target.textContent = entwurfBox.hidden ? "Entwurf ansehen" : "Entwurf ausblenden"; } }, "Entwurf ansehen"),
+          an && an.entwurf ? el("button", { type: "button", class: "neben", onclick: () => alsWord(an.entwurf, pr) }, "Als Word") : null,
+          ok),
+        entwurfBox));
+    }
   }
 
   // ------------------------------------------------------------------
