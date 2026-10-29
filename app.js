@@ -246,7 +246,7 @@
       });
       fuss.append(knopf);
       const assistLink = "#/assistent/" + p.id + (projektId ? "?projekt=" + projektId : "");
-      fuss.append(el("a", { class: "knopf neben", href: angemeldet() ? assistLink : "#/anmelden" }, "Antrag vorbereiten"));
+      fuss.append(el("a", { class: "knopf neben", href: assistLink }, "Antrag vorbereiten"));
     }
     if (p.link) fuss.append(el("a", { class: "original", href: p.link, target: "_blank", rel: "noopener" }, "Beim Fördergeber ansehen"));
 
@@ -795,8 +795,49 @@
         feld("Stand", datum(p.aktualisiert_am)))));
   }
   function karteAktionenKurz(p) {
-    if (!angemeldet()) return el("a", { class: "knopf haupt", href: "#/anmelden" }, "Anmelden zum Merken und Beantragen");
     return el("a", { class: "knopf haupt", href: "#/assistent/" + p.id }, "Antrag vorbereiten");
+  }
+
+  // ------------------------------------------------------------------
+  // Gastmodus des Antragsassistenten: Daten bleiben nur in diesem Browser
+  // und werden nach der Anmeldung ins Konto übernommen.
+  // ------------------------------------------------------------------
+  const GAST_SCHLUESSEL = "foerderkompass_gastantrag";
+  function gastLaden() { try { return JSON.parse(localStorage.getItem(GAST_SCHLUESSEL) || "null"); } catch { return null; } }
+  function gastSpeichern(d) { try { localStorage.setItem(GAST_SCHLUESSEL, JSON.stringify(d)); } catch { /* privat surfen */ } }
+  function gastLoeschen() { try { localStorage.removeItem(GAST_SCHLUESSEL); } catch { /* egal */ } }
+
+  async function gastUebernehmen() {
+    const g = gastLaden();
+    if (!g || !angemeldet() || !(g.pruefung || g.entwurf)) return null;
+    try {
+      const o = g.organisation || {};
+      if (!zustand.organisation && (o.zielgruppe || o.rechtsform || o.landkreis || o.name)) {
+        const { data } = await sb.from("organisationen").insert({
+          name: o.name || null, zielgruppe: o.zielgruppe || null, rechtsform: o.rechtsform || null, landkreis: o.landkreis || null,
+        }).select().single().throwOnError();
+        zustand.organisation = data;
+      }
+      let projektId = null;
+      const v = g.vorhaben || {};
+      if ((v.beschreibung || "").trim().length >= 15) {
+        const { data } = await sb.from("projekte").insert({
+          titel: (v.titel || "").trim() || v.beschreibung.slice(0, 60), beschreibung: v.beschreibung,
+          kosten_euro: v.kosten_euro || null,
+        }).select("id,titel,beschreibung,kosten_euro,beginn,wecker_aktiv,erstellt_am,aktualisiert_am").single().throwOnError();
+        zustand.projekte.unshift(data);
+        projektId = data.id;
+      }
+      const { data: a } = await sb.from("antraege").insert({
+        programm_id: g.programm_id, projekt_id: projektId, pruefung: g.pruefung || null,
+        antworten: g.antworten || null, entwurf: g.entwurf || null,
+      }).select().single().throwOnError();
+      gastLoeschen();
+      return `#/assistent/${g.programm_id}?antrag=${a.id}`;
+    } catch (f) {
+      console.error("Gast-Entwurf konnte nicht übernommen werden", f);
+      return null;
+    }
   }
 
   // ------------------------------------------------------------------
@@ -806,19 +847,31 @@
     const programmId = Number(r.teile[1]);
     const seite = el("div", { class: "seite" });
     main.append(seite);
-    if (!angemeldet()) { seite.append(seitenkopf("Antragsassistent"), anmeldenHinweis("Der Antragsassistent steht angemeldeten Personen zur Verfügung.")); return; }
+    const gast = !angemeldet();
     const { data } = await sb.rpc("programm_details", { ids: [programmId] });
     const programm = data && data[0];
     if (!programm) { seite.append(seitenkopf("Antragsassistent"), meldung("Dieses Programm wurde nicht gefunden.", "fehler")); return; }
 
     // vorhandenen Antrag laden oder neu beginnen
     let antrag = null;
-    const antragId = r.params.get("antrag");
+    const antragId = gast ? null : r.params.get("antrag");
     if (antragId) {
       const { data: a } = await sb.from("antraege").select("*").eq("id", antragId).maybeSingle();
       antrag = a;
     }
     let projektId = (antrag && antrag.projekt_id) || r.params.get("projekt") || (zustand.projekte[0] && zustand.projekte[0].id) || "";
+
+    // Gastdaten: gleiche Programmnummer → weitermachen, sonst neu (Angaben aus der letzten Suche übernehmen)
+    let gastDaten = null;
+    if (gast) {
+      const alt = gastLaden() || {};
+      const suche = (zustand.letzteSuche && zustand.letzteSuche.anfrage) || {};
+      gastDaten = alt.programm_id === programmId ? alt : {
+        programm_id: programmId,
+        vorhaben: alt.vorhaben || { titel: "", beschreibung: suche.vorhaben || "", kosten_euro: null },
+        organisation: alt.organisation || { zielgruppe: suche.zielgruppe || "", landkreis: "", rechtsform: "", name: "" },
+      };
+    }
 
     const schrittleiste = el("ol", { class: "schritte", "aria-label": "Fortschritt" });
     const SCHRITTE = ["Vorhaben wählen", "Voraussetzungen prüfen", "Rückfragen beantworten", "Entwurf bearbeiten"];
@@ -830,12 +883,13 @@
 
     const projekt = () => zustand.projekte.find((p) => p.id === projektId) || null;
     const basisDaten = () => {
-      const o = zustand.organisation || {};
+      const o = gast ? gastDaten.organisation : (zustand.organisation || {});
       return { programm_id: programmId,
         organisation: { ...o, zielgruppe_name: gruppenName(o.zielgruppe) },
-        projekt: projekt() || {} };
+        projekt: gast ? gastDaten.vorhaben : (projekt() || {}) };
     };
     const speichern = async (felder) => {
+      if (gast) { Object.assign(gastDaten, felder); gastSpeichern(gastDaten); return; }
       try {
         if (antrag) {
           const { data: a } = await sb.from("antraege").update(felder).eq("id", antrag.id).select().single().throwOnError();
@@ -851,6 +905,7 @@
     // Schritt 1: Vorhaben wählen
     const schritt1 = () => {
       schritt(0);
+      if (gast) { schritt1Gast(); return; }
       if (!zustand.projekte.length) {
         bereich.replaceChildren(meldung("Legen Sie zuerst ein Projekt an. Der Assistent braucht eine Beschreibung Ihres Vorhabens."),
           projektFormular(null, (neu) => { if (neu) { zustand.projekte.unshift(neu); projektId = neu.id; schritt1(); } else location.hash = "#/projekte"; }));
@@ -865,6 +920,51 @@
         el("div", { class: "knoepfe" }, el("button", { type: "button", class: "haupt", onclick: () => { projektId = wahl.value; schritt2(); } }, "Voraussetzungen prüfen"))));
     };
 
+    const schritt1Gast = () => {
+      const o = gastDaten.organisation, v = gastDaten.vorhaben;
+      const auswahl = (id, werte, wert, leer) => {
+        const s = el("select", { id }, el("option", { value: "" }, leer),
+          werte.map((w) => { const [val, t] = Array.isArray(w) ? w : [w, w]; return el("option", { value: val }, t); }));
+        s.value = wert || "";
+        return s;
+      };
+      const f = {
+        zielgruppe: auswahl("g-gruppe", zustand.zielgruppen, o.zielgruppe, "Bitte wählen"),
+        rechtsform: auswahl("g-rechtsform", RECHTSFORMEN, o.rechtsform, "Bitte wählen"),
+        landkreis: auswahl("g-landkreis", LANDKREISE, o.landkreis, "Bitte wählen"),
+        name: el("input", { type: "text", id: "g-name", maxlength: "200", value: o.name || "", placeholder: "optional" }),
+        titel: el("input", { type: "text", id: "g-titel", maxlength: "200", value: v.titel || "", placeholder: "z. B. Spielplatz am Dorfteich" }),
+        beschreibung: el("textarea", { id: "g-beschreibung", maxlength: "4000", placeholder: "Was soll entstehen? Wer profitiert? Wo? Bis wann?" }, v.beschreibung || ""),
+        kosten: el("input", { type: "number", id: "g-kosten", min: "0", step: "100", value: v.kosten_euro || "" }),
+      };
+      const zeile = (id, text, feld) => el("div", { class: "feldgruppe" }, el("label", { class: "feld", for: id }, text), feld);
+      const fehler = el("p", { class: "formfehler", role: "alert" });
+      bereich.replaceChildren(
+        el("div", { class: "meldung" }, el("p", {}, "Sie nutzen den Assistenten ohne Konto. Ihre Angaben bleiben nur in diesem Browser. ",
+          el("a", { href: "#/anmelden" }, "Mit einem kostenlosen Konto"), " speichern Sie Entwürfe dauerhaft – Ihr bisheriger Entwurf wird dabei übernommen.")),
+        el("form", { class: "flaeche", novalidate: true, onsubmit: (ev) => {
+          ev.preventDefault();
+          if (f.beschreibung.value.trim().length < 15) { fehler.textContent = "Bitte beschreiben Sie Ihr Vorhaben in ein, zwei Sätzen."; f.beschreibung.focus(); return; }
+          gastDaten.organisation = { zielgruppe: f.zielgruppe.value, rechtsform: f.rechtsform.value, landkreis: f.landkreis.value, name: f.name.value.trim() };
+          gastDaten.vorhaben = { titel: f.titel.value.trim(), beschreibung: f.beschreibung.value.trim(), kosten_euro: f.kosten.value ? Number(f.kosten.value) : null };
+          delete gastDaten.pruefung; delete gastDaten.antworten; delete gastDaten.entwurf;
+          gastSpeichern(gastDaten);
+          schritt2();
+        } },
+          el("h2", {}, "Wer stellt den Antrag?"),
+          el("div", { class: "raster" },
+            zeile("g-gruppe", "Antragsteller", f.zielgruppe),
+            zeile("g-rechtsform", "Rechtsform", f.rechtsform),
+            zeile("g-landkreis", "Landkreis / Stadt", f.landkreis),
+            zeile("g-name", "Name der Organisation", f.name)),
+          el("h2", {}, "Ihr Vorhaben"),
+          zeile("g-titel", "Titel", f.titel),
+          zeile("g-beschreibung", "Beschreibung", f.beschreibung),
+          el("div", { style: "max-width:260px" }, zeile("g-kosten", "Geschätzte Kosten in Euro", f.kosten)),
+          el("div", { class: "knoepfe" }, el("button", { type: "submit", class: "haupt" }, "Voraussetzungen prüfen"), fehler)));
+      setTimeout(() => f.beschreibung.focus(), 0);
+    };
+
     // Schritt 2+3: Prüfung und Rückfragen
     const schritt2 = async (vorhanden) => {
       schritt(1);
@@ -875,7 +975,7 @@
           pruefung = (await funktion("assistent", { ...basisDaten(), aktion: "pruefen" })).pruefung;
           await speichern({ pruefung, projekt_id: projektId || null });
         } catch (f) {
-          bereich.replaceChildren(meldung(fehlertext(f), "fehler"), el("button", { type: "button", class: "neben", onclick: () => schritt2() }, "Erneut versuchen"));
+          bereich.replaceChildren(...assistentFehler(f, () => schritt2()));
           return;
         }
       }
@@ -884,7 +984,7 @@
       const statusText = { erfuellt: "erfüllt", unklar: "unklar", nicht_erfuellt: "nicht erfüllt" };
       const einschaetzung = { passt: "Das Programm passt voraussichtlich.", passt_teilweise: "Das Programm passt möglicherweise – einige Punkte sind offen.", passt_nicht: "Das Programm passt voraussichtlich nicht." }[pruefung.gesamteinschaetzung] || "";
       const fragen = Array.isArray(pruefung.rueckfragen) ? pruefung.rueckfragen : [];
-      const alteAntworten = new Map(((antrag && antrag.antworten) || []).map((a) => [a.frage, a.antwort]));
+      const alteAntworten = new Map(((gast ? gastDaten.antworten : antrag && antrag.antworten) || []).map((a) => [a.frage, a.antwort]));
       const felder = fragen.map((f, i) => {
         const t = el("textarea", { id: "frage" + i, style: "min-height:80px" }, alteAntworten.get(f.frage) || "");
         return { frage: f.frage, feld: t, knoten: el("div", { class: "feldgruppe" },
@@ -906,7 +1006,8 @@
           felder.map((f) => f.knoten),
           el("div", { class: "knoepfe" },
             el("button", { type: "submit", class: "haupt" }, "Antragsentwurf schreiben"),
-            el("button", { type: "button", class: "leise", onclick: () => schritt2() }, "Prüfung wiederholen"))));
+            el("button", { type: "button", class: "leise", onclick: () => schritt2() }, "Prüfung wiederholen"),
+            el("button", { type: "button", class: "leise", onclick: () => schritt1() }, gast ? "Angaben ändern" : "Anderes Projekt wählen"))));
     };
 
     // Schritt 4: Entwurf
@@ -920,7 +1021,7 @@
           entwurf = (await funktion("assistent", { ...basisDaten(), aktion: "entwurf", antworten })).entwurf;
           await speichern({ entwurf });
         } catch (f) {
-          bereich.replaceChildren(meldung(fehlertext(f), "fehler"), el("button", { type: "button", class: "neben", onclick: () => schritt4(antworten) }, "Erneut versuchen"));
+          bereich.replaceChildren(...assistentFehler(f, () => schritt4(antworten)));
           return;
         }
       }
@@ -932,6 +1033,11 @@
       });
       const aktueller = () => ({ titel: titelFeld.value, abschnitte: abschnitte.map((a) => ({ ueberschrift: a.u.value, text: a.t.value })), hinweise: entwurf.hinweise || [] });
       const status = el("span", { class: "erfolg", "aria-live": "polite" });
+      if (gast) {
+        const sichern = () => speichern({ entwurf: aktueller() });
+        titelFeld.addEventListener("change", sichern);
+        abschnitte.forEach((a) => { a.u.addEventListener("change", sichern); a.t.addEventListener("change", sichern); });
+      }
       bereich.replaceChildren(
         (entwurf.hinweise || []).length ? el("div", { class: "meldung hinweis" }, el("p", {}, el("strong", {}, "Vor dem Einreichen prüfen:")), el("ul", {}, entwurf.hinweise.map((h) => el("li", {}, h)))) : null,
         el("div", { class: "flaeche" },
@@ -939,17 +1045,34 @@
           el("div", { class: "entwurf-abschnitt" }, titelFeld),
           abschnitte.map((a) => a.knoten),
           el("div", { class: "knoepfe nicht-drucken" },
-            el("button", { type: "button", class: "haupt", onclick: async () => { await speichern({ entwurf: aktueller() }); status.textContent = "Gespeichert."; } }, "Speichern"),
+            gast
+              ? el("button", { type: "button", class: "haupt", onclick: async () => { await speichern({ entwurf: aktueller() }); location.hash = "#/anmelden"; } }, "Konto anlegen und Entwurf speichern")
+              : el("button", { type: "button", class: "haupt", onclick: async () => { await speichern({ entwurf: aktueller() }); status.textContent = "Gespeichert."; } }, "Speichern"),
             el("button", { type: "button", class: "neben", onclick: () => alsWord(aktueller(), programm) }, "Als Word herunterladen"),
             el("button", { type: "button", class: "neben", onclick: () => alsPdf(aktueller(), programm) }, "Als PDF drucken"),
-            el("button", { type: "button", class: "leise", onclick: () => schritt2(antrag && antrag.pruefung) }, "Zurück zu den Rückfragen"),
+            el("button", { type: "button", class: "leise", onclick: () => schritt2(gast ? gastDaten.pruefung : antrag && antrag.pruefung) }, "Zurück zu den Rückfragen"),
             status)));
     };
 
     // Einstieg
+    if (gast) {
+      if (gastDaten.entwurf) schritt4(gastDaten.antworten || [], gastDaten.entwurf);
+      else if (gastDaten.pruefung) schritt2(gastDaten.pruefung);
+      else schritt1();
+      return;
+    }
     if (antrag && antrag.entwurf) schritt4(antrag.antworten || [], antrag.entwurf);
     else if (antrag && antrag.pruefung) schritt2(antrag.pruefung);
     else schritt1();
+  }
+
+  function assistentFehler(f, nochmal) {
+    if (f && f.code === "limit_gast") {
+      return [el("div", { class: "meldung hinweis", role: "alert" }, el("p", {}, f.message),
+        el("p", {}, el("a", { class: "knopf haupt", href: "#/anmelden" }, "Kostenloses Konto anlegen")))];
+    }
+    return [meldung(fehlertext(f), f && f.code ? "hinweis" : "fehler"),
+      el("button", { type: "button", class: "neben", onclick: nochmal }, "Erneut versuchen")];
   }
 
   function entwurfHtml(e, programm) {
@@ -1038,13 +1161,18 @@
       if ((sitzung && sitzung.user.id) !== vorher) {
         await kontoLaden();
         if (ereignis === "SIGNED_IN") {
-          location.hash = zustand.organisation ? "#/projekte" : "#/profil";
+          const ziel = await gastUebernehmen();
+          location.hash = ziel || (zustand.organisation ? "#/projekte" : "#/profil");
           return;
         }
         zeigen();
       }
     });
     window.addEventListener("hashchange", zeigen);
+    if (zustand.sitzung) {
+      const ziel = await gastUebernehmen();
+      if (ziel) { location.hash = ziel; return; }
+    }
     if (kamVomAnmeldelink && zustand.sitzung) {
       location.hash = zustand.organisation ? "#/projekte" : "#/profil";
       return;
